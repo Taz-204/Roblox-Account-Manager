@@ -1,6 +1,7 @@
-//! Account storage and launching, shared by the window and the command line.
+//! Account storage, shared by the window and the command line.
 //!
-//! Standard library only. Cookies and passwords are deliberately NOT stored.
+//! Standard library only. Cookies are never stored in plain text: each account
+//! keeps only the DPAPI-encrypted blob produced by the C# helper.
 
 use std::env;
 use std::fs;
@@ -12,6 +13,8 @@ use std::process::Command;
 pub struct Account {
     pub name: String,
     pub note: String,
+    /// Encrypted cookie from the helper's `protect` command. Empty if none saved.
+    pub cookie_blob: String,
 }
 
 pub fn config_path() -> PathBuf {
@@ -27,15 +30,31 @@ pub fn config_path() -> PathBuf {
     base.join("rbx-alt-manager").join("accounts.txt")
 }
 
-/// File format: one account per line, `name<TAB>note`.
+/// Removes tabs and line breaks so a field can't break the file format.
+pub fn clean_field(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c == '\t' || c == '\n' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// File format: one account per line, `name<TAB>note<TAB>cookie_blob`.
 pub fn parse_accounts(text: &str) -> Vec<Account> {
     text.lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| {
-            let mut parts = l.splitn(2, '\t');
+            let mut parts = l.splitn(3, '\t');
             Account {
                 name: parts.next().unwrap_or("").trim().to_string(),
                 note: parts.next().unwrap_or("").trim().to_string(),
+                cookie_blob: parts.next().unwrap_or("").trim().to_string(),
             }
         })
         .filter(|a| !a.name.is_empty())
@@ -45,7 +64,14 @@ pub fn parse_accounts(text: &str) -> Vec<Account> {
 pub fn format_accounts(accounts: &[Account]) -> String {
     accounts
         .iter()
-        .map(|a| format!("{}\t{}\n", a.name, a.note))
+        .map(|a| {
+            format!(
+                "{}\t{}\t{}\n",
+                clean_field(&a.name),
+                clean_field(&a.note),
+                a.cookie_blob.trim()
+            )
+        })
         .collect()
 }
 
@@ -88,17 +114,19 @@ pub fn open_place(place_id: u64) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    fn account(name: &str, note: &str, blob: &str) -> Account {
+        Account {
+            name: name.into(),
+            note: note.into(),
+            cookie_blob: blob.into(),
+        }
+    }
+
     #[test]
     fn round_trips_accounts() {
         let accounts = vec![
-            Account {
-                name: "alt1".into(),
-                note: "farming bank".into(),
-            },
-            Account {
-                name: "alt2".into(),
-                note: String::new(),
-            },
+            account("alt1", "farming bank", "QmxvYg=="),
+            account("alt2", "", ""),
         ];
         let text = format_accounts(&accounts);
         assert_eq!(parse_accounts(&text), accounts);
@@ -107,12 +135,18 @@ mod tests {
     #[test]
     fn skips_blank_and_nameless_lines() {
         let parsed = parse_accounts("\n\n\tno name\nreal\tnote\n");
-        assert_eq!(
-            parsed,
-            vec![Account {
-                name: "real".into(),
-                note: "note".into()
-            }]
-        );
+        assert_eq!(parsed, vec![account("real", "note", "")]);
+    }
+
+    #[test]
+    fn tabs_in_notes_cannot_corrupt_the_file() {
+        let accounts = vec![account("alt", "has\ttab\nand newline", "BLOB")];
+        let parsed = parse_accounts(&format_accounts(&accounts));
+        assert_eq!(parsed, vec![account("alt", "has tab and newline", "BLOB")]);
+    }
+
+    #[test]
+    fn clean_field_removes_separators() {
+        assert_eq!(clean_field("  a\tb\r\nc  "), "a b  c");
     }
 }

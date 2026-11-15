@@ -1,9 +1,13 @@
 //! egui window: account list on the left, details and actions on the right.
-//! Built only with `--features gui`.
+//! Built only with `--features gui`. Launching runs in the background so the
+//! window keeps responding while the helper talks to Roblox.
 
+use crate::helper;
 use crate::store::{self, Account};
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 
 pub struct App {
     path: PathBuf,
@@ -11,8 +15,11 @@ pub struct App {
     selected: Option<usize>,
     new_name: String,
     new_note: String,
+    new_cookie: String,
     place_id: String,
+    helper_path: String,
     status: String,
+    pending: Option<Receiver<String>>,
 }
 
 impl App {
@@ -27,8 +34,11 @@ impl App {
             selected: None,
             new_name: String::new(),
             new_note: String::new(),
+            new_cookie: String::new(),
             place_id: String::new(),
+            helper_path: helper::default_helper_path().to_string_lossy().into_owned(),
             status,
+            pending: None,
         }
     }
 
@@ -39,7 +49,7 @@ impl App {
     }
 
     fn add_account(&mut self) {
-        let name = self.new_name.trim().to_string();
+        let name = store::clean_field(&self.new_name);
         if name.is_empty() {
             self.status = "Enter an account name.".into();
             return;
@@ -52,10 +62,26 @@ impl App {
             self.status = format!("'{name}' already exists.");
             return;
         }
-        let note = self.new_note.trim().to_string();
+
+        // Encrypt the cookie before anything is stored. The field is cleared either way.
+        let cookie = std::mem::take(&mut self.new_cookie);
+        let cookie_blob = if cookie.trim().is_empty() {
+            String::new()
+        } else {
+            match helper::protect(&PathBuf::from(&self.helper_path), &cookie) {
+                Ok(blob) => blob,
+                Err(e) => {
+                    self.status = format!("Could not save cookie: {e}");
+                    return;
+                }
+            }
+        };
+
+        let note = store::clean_field(&self.new_note);
         self.accounts.push(Account {
             name: name.clone(),
             note,
+            cookie_blob,
         });
         self.selected = Some(self.accounts.len() - 1);
         self.new_name.clear();
@@ -74,23 +100,60 @@ impl App {
         }
     }
 
-    fn launch_place(&mut self) {
-        match self.place_id.trim().parse::<u64>() {
-            Ok(id) => {
-                self.status = match store::open_place(id) {
-                    Ok(()) => format!("Opened place {id}."),
-                    Err(e) => format!("Could not open place: {e}"),
-                };
-            }
-            Err(_) => self.status = "Place ID must be a number.".into(),
+    fn launch_selected(&mut self) {
+        if self.pending.is_some() {
+            self.status = "Still launching the previous game. Please wait.".into();
+            return;
         }
+        let Some(account) = self.selected.and_then(|i| self.accounts.get(i)) else {
+            self.status = "Select an account first.".into();
+            return;
+        };
+        if account.cookie_blob.is_empty() {
+            self.status = format!(
+                "{} has no saved cookie. Remove it and add it again with a cookie.",
+                account.name
+            );
+            return;
+        }
+        let place_id = match self.place_id.trim().parse::<u64>() {
+            Ok(id) => id,
+            Err(_) => {
+                self.status = "Place ID must be a number.".into();
+                return;
+            }
+        };
+
+        let (tx, rx) = mpsc::channel();
+        let helper_path = PathBuf::from(&self.helper_path);
+        let blob = account.cookie_blob.clone();
+        let name = account.name.clone();
+
+        thread::spawn(move || {
+            let message = match helper::launch(&helper_path, &blob, place_id) {
+                Ok(()) => format!("Launched {name} in place {place_id}."),
+                Err(e) => format!("Launch failed for {name}: {e}"),
+            };
+            let _ = tx.send(message);
+        });
+
+        self.pending = Some(rx);
+        self.status = "Launching...".into();
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Actions are collected here and applied after the panels are drawn,
-        // so the panel closures never need to borrow all of `self` at once.
+        // Pick up the result of a background launch.
+        let finished = self.pending.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some(message) = finished {
+            self.status = message;
+            self.pending = None;
+        } else if self.pending.is_some() {
+            ctx.request_repaint();
+        }
+
+        // Actions are collected here and applied after the panels are drawn.
         let mut add = false;
         let mut remove = false;
         let mut launch = false;
@@ -129,6 +192,12 @@ impl eframe::App for App {
             match self.selected.and_then(|i| self.accounts.get_mut(i)) {
                 Some(account) => {
                     ui.label(format!("Name: {}", account.name));
+                    let cookie_status = if account.cookie_blob.is_empty() {
+                        "none (launching needs a cookie)"
+                    } else {
+                        "saved (encrypted)"
+                    };
+                    ui.label(format!("Cookie: {cookie_status}"));
                     ui.horizontal(|ui| {
                         ui.label("Note:");
                         if ui.text_edit_singleline(&mut account.note).changed() {
@@ -145,19 +214,30 @@ impl eframe::App for App {
             }
 
             ui.separator();
+            ui.heading("Launch");
+            ui.add(egui::TextEdit::singleline(&mut self.place_id).hint_text("Place ID"));
+            if ui.button("Launch selected account").clicked() {
+                launch = true;
+            }
+
+            ui.separator();
             ui.heading("Add account");
             ui.add(egui::TextEdit::singleline(&mut self.new_name).hint_text("Account name"));
             ui.add(egui::TextEdit::singleline(&mut self.new_note).hint_text("Note (optional)"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.new_cookie)
+                    .hint_text(".ROBLOSECURITY cookie (optional)")
+                    .password(true),
+            );
             if ui.button("Add account").clicked() {
                 add = true;
             }
 
             ui.separator();
-            ui.heading("Open a place");
-            ui.add(egui::TextEdit::singleline(&mut self.place_id).hint_text("Place ID"));
-            if ui.button("Open in Roblox").clicked() {
-                launch = true;
-            }
+            ui.collapsing("Helper settings", |ui| {
+                ui.label("Path to RobloxProcessLookup.exe:");
+                ui.text_edit_singleline(&mut self.helper_path);
+            });
         });
 
         if note_changed {
@@ -170,7 +250,7 @@ impl eframe::App for App {
             self.remove_selected();
         }
         if launch {
-            self.launch_place();
+            self.launch_selected();
         }
     }
 }

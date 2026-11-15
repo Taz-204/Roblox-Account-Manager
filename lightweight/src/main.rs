@@ -3,6 +3,7 @@
 //! Build the window:      cargo run --release --features gui
 //! Command-line only:     cargo run -- --cli   (or build without the gui feature)
 
+mod helper;
 mod store;
 
 #[cfg(feature = "gui")]
@@ -10,7 +11,7 @@ mod gui;
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use store::{Account, config_path, load, open_place, save};
+use store::{Account, clean_field, config_path, load, open_place, save};
 
 fn main() {
     let path = config_path();
@@ -83,6 +84,7 @@ fn print_help() {
   remove <name>            Remove an account
   note <name> <text...>    Change an account's note
   open <place_id>          Open a Roblox place in the default-signed-in client
+  launch <name> <place_id> Launch a place for an account that has a saved cookie
   help                     Show this help
   quit                     Exit"
     );
@@ -110,10 +112,11 @@ fn run_command(line: &str, accounts: &mut Vec<Account>, path: &PathBuf) -> Resul
             if accounts.iter().any(|a| a.name.eq_ignore_ascii_case(&name)) {
                 return Err(format!("'{name}' already exists"));
             }
-            let note = rest[1..].join(" ");
+            let note = clean_field(&rest[1..].join(" "));
             accounts.push(Account {
                 name: name.clone(),
                 note,
+                cookie_blob: String::new(),
             });
             save(path, accounts).map_err(|e| e.to_string())?;
             println!("Added {name}");
@@ -146,6 +149,23 @@ fn run_command(line: &str, accounts: &mut Vec<Account>, path: &PathBuf) -> Resul
                 .map_err(|_| "place id must be a number".to_string())?;
             open_place(id).map_err(|e| e.to_string())?;
             println!("Opened place {id}");
+        }
+        "launch" => {
+            let name = rest.first().ok_or("usage: launch <name> <place_id>")?;
+            let id: u64 = rest
+                .get(1)
+                .ok_or("usage: launch <name> <place_id>")?
+                .parse()
+                .map_err(|_| "place id must be a number".to_string())?;
+            let account = accounts
+                .iter()
+                .find(|a| a.name.eq_ignore_ascii_case(name))
+                .ok_or(format!("no account named '{name}'"))?;
+            if account.cookie_blob.is_empty() {
+                return Err(format!("'{name}' has no saved cookie"));
+            }
+            helper::launch(&helper::default_helper_path(), &account.cookie_blob, id)?;
+            println!("Launched {name} in place {id}");
         }
         "help" | "?" => print_help(),
         "quit" | "exit" | "q" => return Ok(false),
