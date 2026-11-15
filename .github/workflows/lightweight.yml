@@ -39,4 +39,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
-      - run: msbuild RobloxProcessLookup.csproj /p:Configuration=Release
+      - run: msbuild RobloxProcessLookup.csproj /restore /p:Configuration=Release
