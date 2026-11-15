@@ -1,0 +1,42 @@
+name: Lightweight build
+
+on:
+  push:
+    branches: [lightweight-rewrite]
+    paths: ["lightweight/**", ".github/workflows/lightweight.yml"]
+  pull_request:
+    paths: ["lightweight/**"]
+  workflow_dispatch:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lightweight/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest -v test_roblox_lookup
+
+  rust:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: lightweight
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test
+      - run: cargo build --release --features gui
+
+  csharp:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: lightweight/csharp/RobloxProcessLookup
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - run: msbuild RobloxProcessLookup.csproj /p:Configuration=Release

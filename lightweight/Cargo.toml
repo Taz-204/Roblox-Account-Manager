@@ -1,0 +1,13 @@
+[package]
+name = "rbx_alt_manager"
+version = "0.1.0"
+edition = "2024"
+description = "Lightweight Roblox alt-account list"
+license = "GPL-3.0-only"
+
+[dependencies]
+eframe = { version = "0.29", optional = true }
+
+[features]
+default = []
+gui = ["dep:eframe"]
