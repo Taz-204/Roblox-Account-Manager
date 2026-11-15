@@ -1,15 +1,64 @@
-// Prints the running Roblox game processes as a JSON array, for example:
-//   [{"pid":1234,"start":"2026-11-15T16:00:00.0000000+00:00","window_title":"Roblox","command_line":"..."}]
-// Windows only. Reads each process's command line through WMI once per run.
+// Command-line helper for the lightweight Roblox account manager. Windows only.
+//
+//   RobloxProcessLookup.exe                 Print running Roblox game processes as JSON.
+//   RobloxProcessLookup.exe protect         Read a .ROBLOSECURITY cookie from stdin and print it encrypted (base64).
+//   RobloxProcessLookup.exe launch <placeId>  Read an encrypted cookie from stdin and start the game.
+//
+// Errors go to stderr with exit code 1. Cookies are never printed.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Management;
 using System.Text;
 
 static class Program
 {
-    static int Main()
+    static int Main(string[] args)
+    {
+        try
+        {
+            if (args.Length == 0) return ListProcesses();
+
+            switch (args[0])
+            {
+                case "protect":
+                    Console.WriteLine(RobloxLauncher.Protect(ReadStdinLine()));
+                    return 0;
+
+                case "launch":
+                    if (args.Length < 2) return Fail("usage: launch <placeId>");
+                    long placeId;
+                    if (!long.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out placeId))
+                        return Fail("place id must be a number");
+                    RobloxLauncher.Launch(RobloxLauncher.Unprotect(ReadStdinLine()), placeId);
+                    Console.WriteLine("{\"ok\":true}");
+                    return 0;
+
+                default:
+                    return Fail("unknown command: " + args[0]);
+            }
+        }
+        catch (Exception ex)
+        {
+            return Fail(ex.Message);
+        }
+    }
+
+    static string ReadStdinLine()
+    {
+        string line = Console.In.ReadLine();
+        if (string.IsNullOrWhiteSpace(line)) throw new InvalidOperationException("no input on stdin");
+        return line.Trim();
+    }
+
+    static int Fail(string message)
+    {
+        Console.Error.WriteLine("error: " + message);
+        return 1;
+    }
+
+    static int ListProcesses()
     {
         var items = new List<string>();
 

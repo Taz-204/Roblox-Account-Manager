@@ -51,3 +51,32 @@ if __name__ == "__main__":
     helper_path = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("RobloxProcessLookup.exe")
     for proc in list_roblox_processes(helper_path):
         print(proc)
+
+
+def protect_cookie(helper: Path, cookie: str) -> str:
+    """Encrypts a .ROBLOSECURITY cookie with Windows DPAPI via the helper.
+
+    The cookie is passed on stdin, not in the command line, so it doesn't show
+    up in process listings. Returns a base64 blob to store in place of the cookie.
+    """
+    result = subprocess.run(
+        [str(helper), "protect"],
+        input=cookie + "\n",
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def launch_account(helper: Path, protected_cookie: str, place_id: int) -> None:
+    """Starts a Roblox game for the account whose cookie blob is given."""
+    subprocess.run(
+        [str(helper), "launch", str(int(place_id))],
+        input=protected_cookie + "\n",
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
