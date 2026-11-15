@@ -105,11 +105,29 @@ public static Color Lerp(this Color s, Color t, float k)
 
     public static double ToRobloxTick(this DateTime Date) => ((Date - Epoch).Ticks / TimeSpan.TicksPerSecond) + ((double)Date.Millisecond / 1000);
 
+    // A process's command line never changes after it starts, so cache it per (PID, start time).
+    // The start time in the key guards against PID reuse. Querying WMI is slow, and this was being
+    // called on the UI thread for every Roblox process on every watcher tick.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(int Id, long StartTicks), string> CommandLineCache = new System.Collections.Concurrent.ConcurrentDictionary<(int Id, long StartTicks), string>();
+
     public static string GetCommandLine(this Process process)
     {
+        long StartTicks;
+
+        try { StartTicks = process.StartTime.Ticks; }
+        catch { return null; } // Process has already exited or we have no access
+
+        var Key = (process.Id, StartTicks);
+
+        if (CommandLineCache.TryGetValue(Key, out string Cached)) return Cached;
+
         using ManagementObjectSearcher searcher = new ManagementObjectSearcher("SELECT CommandLine FROM Win32_Process WHERE ProcessId = " + process.Id);
         using ManagementObjectCollection objects = searcher.Get();
-        return objects.Cast<ManagementBaseObject>().SingleOrDefault()?["CommandLine"]?.ToString();
+        string CommandLine = objects.Cast<ManagementBaseObject>().SingleOrDefault()?["CommandLine"]?.ToString();
+
+        if (!string.IsNullOrEmpty(CommandLine)) CommandLineCache[Key] = CommandLine;
+
+        return CommandLine;
     }
 
     public static async Task<string> GetRandomJobId(long PlaceId, bool ChooseLowestServer = false)
