@@ -45,6 +45,8 @@ enum Action {
     ToggleMultiInstance,
     ApplyFps,
     ApplyLaunchDelay,
+    ApplyGraphics,
+    LowerPriority,
 }
 
 pub struct App {
@@ -67,6 +69,7 @@ pub struct App {
     preset_place: String,
     fps_text: String,
     delay_text: String,
+    graphics_text: String,
     helper_path: String,
     status: String,
     avatars: HashMap<String, Vec<u8>>,
@@ -108,6 +111,7 @@ impl App {
             preset_place: String::new(),
             fps_text: settings.fps_cap.to_string(),
             delay_text: settings.launch_delay_ms.to_string(),
+            graphics_text: settings.graphics_level.to_string(),
             helper_path,
             status,
             avatars: HashMap::new(),
@@ -124,6 +128,13 @@ impl App {
         if settings.fps_cap > 0 {
             if let Err(e) = helper::set_fps(&PathBuf::from(&app.helper_path), settings.fps_cap) {
                 app.status = format!("Could not apply saved FPS cap: {e}");
+            }
+        }
+        if settings.graphics_level > 0 {
+            if let Err(e) =
+                helper::set_graphics(&PathBuf::from(&app.helper_path), settings.graphics_level)
+            {
+                app.status = format!("Could not apply saved graphics level: {e}");
             }
         }
         app
@@ -378,6 +389,38 @@ impl App {
                 self.status = format!("Launch delay set to {ms} ms.");
             }
             Err(_) => self.status = "Launch delay must be a whole number of milliseconds.".into(),
+        }
+    }
+
+    fn apply_graphics(&mut self) {
+        match self.graphics_text.trim().parse::<u32>() {
+            Ok(level) if level <= 10 => {
+                self.settings.graphics_level = level;
+                match helper::set_graphics(&PathBuf::from(&self.helper_path), level) {
+                    Ok(()) => {
+                        self.status = if level == 0 {
+                            "Graphics override removed. Restart Roblox to apply.".into()
+                        } else {
+                            format!("Graphics quality set to {level}. Restart Roblox to apply.")
+                        };
+                    }
+                    Err(e) => self.status = format!("Could not set graphics quality: {e}"),
+                }
+                self.persist_settings();
+            }
+            _ => self.status = "Graphics quality must be 0 to 10 (0 removes the override).".into(),
+        }
+    }
+
+    fn lower_priority(&mut self) {
+        match helper::lower_priority(&PathBuf::from(&self.helper_path)) {
+            Ok(count) => {
+                self.status = format!(
+                    "Lowered priority of {} running Roblox window(s).",
+                    count.trim()
+                )
+            }
+            Err(e) => self.status = format!("Could not lower priority: {e}"),
         }
     }
 
@@ -643,6 +686,24 @@ impl App {
         });
 
         ui.separator();
+        ui.label("Graphics quality for every Roblox window, 1 (lowest) to 10 (0 removes the override). Restart Roblox to apply.");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.graphics_text).desired_width(80.0));
+            if ui.button("Apply graphics").clicked() {
+                actions.push(Action::ApplyGraphics);
+            }
+        });
+
+        ui.separator();
+        ui.label("Gives running Roblox windows less CPU priority. Can make the window you're watching stutter when the PC is busy.");
+        if ui
+            .button("Lower priority of running Roblox windows")
+            .clicked()
+        {
+            actions.push(Action::LowerPriority);
+        }
+
+        ui.separator();
         ui.collapsing("Helper settings", |ui| {
             ui.label("Path to RobloxProcessLookup.exe:");
             ui.text_edit_singleline(&mut self.helper_path);
@@ -757,6 +818,8 @@ impl eframe::App for App {
                 Action::ToggleMultiInstance => self.toggle_multi_instance(),
                 Action::ApplyFps => self.apply_fps(),
                 Action::ApplyLaunchDelay => self.apply_launch_delay(),
+                Action::ApplyGraphics => self.apply_graphics(),
+                Action::LowerPriority => self.lower_priority(),
             }
         }
     }

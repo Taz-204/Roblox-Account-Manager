@@ -92,6 +92,16 @@ pub fn set_fps(helper: &Path, fps: u32) -> Result<(), String> {
     run(helper, &["fps", &fps.to_string()], "").map(|_| ())
 }
 
+/// Sets the graphics quality override. 0 removes it.
+pub fn set_graphics(helper: &Path, level: u32) -> Result<(), String> {
+    run(helper, &["graphics", &level.to_string()], "").map(|_| ())
+}
+
+/// Lowers the CPU priority of running Roblox windows. Returns how many were changed.
+pub fn lower_priority(helper: &Path) -> Result<String, String> {
+    run(helper, &["priority"], "")
+}
+
 /// Starts the helper that holds Roblox's single-instance lock. The caller keeps the child and kills it to turn this off.
 pub fn start_multi_instance(helper: &Path) -> Result<Child, String> {
     Command::new(helper)

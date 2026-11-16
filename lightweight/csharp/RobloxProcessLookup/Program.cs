@@ -5,6 +5,8 @@
 //   RobloxProcessLookup.exe launch <placeId> [jobId]  Read an encrypted cookie from stdin and start the game.
 //   RobloxProcessLookup.exe login           Open a Roblox login window. Prints the encrypted cookie, username, and user id.
 //   RobloxProcessLookup.exe fps <n>         Set the Roblox FPS cap (0 removes it).
+//   RobloxProcessLookup.exe graphics <1-10>  Set the Roblox graphics quality override (0 removes it).
+//   RobloxProcessLookup.exe priority        Lower the CPU priority of running Roblox windows. Prints the count.
 //   RobloxProcessLookup.exe avatar <userId> <path>  Save the account's headshot as a PNG.
 //   RobloxProcessLookup.exe multi-instance  Hold Roblox's single-instance lock. Runs until ended.
 //
@@ -44,6 +46,18 @@ static class Program
                     if (!int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out fps) || fps < 0)
                         return Fail("fps must be a whole number, 0 or more");
                     Console.WriteLine(RobloxLauncher.SetFps(fps));
+                    return 0;
+
+                case "graphics":
+                    if (args.Length < 2) return Fail("usage: graphics <1-10>, 0 removes the override");
+                    int level;
+                    if (!int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out level) || level < 0 || level > 10)
+                        return Fail("graphics level must be 0 to 10");
+                    Console.WriteLine(RobloxLauncher.SetGraphicsLevel(level));
+                    return 0;
+
+                case "priority":
+                    Console.WriteLine(RobloxLauncher.LowerRobloxPriority());
                     return 0;
 
                 case "avatar":

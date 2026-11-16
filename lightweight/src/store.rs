@@ -32,6 +32,8 @@ pub struct Settings {
     pub fps_cap: u32,
     /// Pause between launches when several accounts start together.
     pub launch_delay_ms: u64,
+    /// Graphics quality override, 1 (lowest) to 10. 0 leaves Roblox's setting alone.
+    pub graphics_level: u32,
 }
 
 impl Default for Settings {
@@ -40,6 +42,7 @@ impl Default for Settings {
             multi_instance: false,
             fps_cap: 0,
             launch_delay_ms: 2000,
+            graphics_level: 0,
         }
     }
 }
@@ -157,6 +160,7 @@ pub fn parse_settings(text: &str) -> Settings {
         match key.trim() {
             "multi_instance" => settings.multi_instance = value.trim() == "true",
             "fps_cap" => settings.fps_cap = value.trim().parse().unwrap_or(0),
+            "graphics_level" => settings.graphics_level = value.trim().parse().unwrap_or(0),
             "launch_delay_ms" => {
                 settings.launch_delay_ms = value
                     .trim()
@@ -171,8 +175,11 @@ pub fn parse_settings(text: &str) -> Settings {
 
 pub fn format_settings(settings: &Settings) -> String {
     format!(
-        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\n",
-        settings.multi_instance, settings.fps_cap, settings.launch_delay_ms
+        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\n",
+        settings.multi_instance,
+        settings.fps_cap,
+        settings.launch_delay_ms,
+        settings.graphics_level
     )
 }
 
@@ -317,6 +324,7 @@ mod tests {
             multi_instance: true,
             fps_cap: 144,
             launch_delay_ms: 750,
+            graphics_level: 7,
         };
         assert_eq!(parse_settings(&format_settings(&settings)), settings);
     }

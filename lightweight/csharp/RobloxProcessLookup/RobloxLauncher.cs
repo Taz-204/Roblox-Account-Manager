@@ -21,6 +21,7 @@ static class RobloxLauncher
     const string ThumbnailsBase = "https://thumbnails.roblox.com/";
     const string Referer = "https://www.roblox.com/games/4924922222/Brookhaven-RP";
     const string FpsKey = "DFIntTaskSchedulerTargetFps";
+    const string GraphicsKey = "DFIntDebugFRMQualityLevelOverride";
 
     static RobloxLauncher()
     {
@@ -145,9 +146,41 @@ static class RobloxLauncher
         Process.Start(new ProcessStartInfo { FileName = link, UseShellExecute = true });
     }
 
-    // Sets the FPS cap in Roblox's client settings. 0 removes the cap. Returns the file written.
-    // This is a client-wide setting, so it applies to every Roblox instance. Roblox must restart to pick it up.
+    // Sets the FPS cap in Roblox's client settings. 0 removes the cap.
     public static string SetFps(int fps)
+    {
+        return SetClientSetting(FpsKey, fps > 0 ? (object)fps : null);
+    }
+
+    // Graphics quality override (1 = lowest, 10 = highest). 0 removes the override.
+    public static string SetGraphicsLevel(int level)
+    {
+        return SetClientSetting(GraphicsKey, level > 0 ? (object)level : null);
+    }
+
+    // Lowers the CPU priority of every running Roblox window so they yield to other work.
+    // Returns how many windows were changed.
+    public static int LowerRobloxPriority()
+    {
+        int changed = 0;
+        foreach (Process process in Process.GetProcessesByName("RobloxPlayerBeta"))
+        {
+            try
+            {
+                process.PriorityClass = ProcessPriorityClass.BelowNormal;
+                changed++;
+            }
+            catch (Exception)
+            {
+                // Process exited or we don't have access. Skip it.
+            }
+        }
+        return changed;
+    }
+
+    // Writes one client setting. A null value removes it. Returns the file written.
+    // This is a client-wide setting, so it applies to every Roblox instance. Roblox must restart to pick it up.
+    static string SetClientSetting(string key, object value)
     {
         string versionFolder = FindLatestVersionFolder();
         if (versionFolder == null)
@@ -166,8 +199,8 @@ static class RobloxLauncher
                 settings = serializer.Deserialize<Dictionary<string, object>>(text) ?? settings;
         }
 
-        if (fps > 0) settings[FpsKey] = fps;
-        else settings.Remove(FpsKey);
+        if (value != null) settings[key] = value;
+        else settings.Remove(key);
 
         File.WriteAllText(file, serializer.Serialize(settings));
         return file;
