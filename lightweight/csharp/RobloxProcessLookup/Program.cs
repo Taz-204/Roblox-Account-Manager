@@ -70,9 +70,9 @@ static class Program
                 case "resize":
                     if (args.Length < 3) return Fail("usage: resize <width> <height>");
                     int width, height;
-                    if (!int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out width) || width < 64 || width > 4000
-                        || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out height) || height < 64 || height > 4000)
-                        return Fail("width and height must be whole numbers from 64 to 4000");
+                    if (!int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out width) || width < 1 || width > 4000
+                        || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out height) || height < 1 || height > 4000)
+                        return Fail("width and height must be whole numbers from 1 to 4000");
                     foreach (string size in WindowResizer.Resize(width, height)) Console.WriteLine(size);
                     return 0;
 
