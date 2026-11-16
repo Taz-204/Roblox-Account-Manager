@@ -5,6 +5,7 @@
 
 mod helper;
 mod store;
+mod winapi;
 
 #[cfg(feature = "gui")]
 mod gui;

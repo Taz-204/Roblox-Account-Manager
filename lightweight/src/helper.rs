@@ -102,26 +102,6 @@ pub fn apply_flags(helper: &Path, json: &str) -> Result<(), String> {
     run(helper, &["flags"], json).map(|_| ())
 }
 
-/// Spreads running Roblox windows across CPU cores. Returns how many were set.
-pub fn spread_across_cores(helper: &Path) -> Result<String, String> {
-    run(helper, &["spread"], "")
-}
-
-/// Resizes every Roblox window. Returns the size Windows applied to each, one per line.
-pub fn resize_windows(helper: &Path, width: u32, height: u32) -> Result<String, String> {
-    run(
-        helper,
-        &["resize", &width.to_string(), &height.to_string()],
-        "",
-    )
-}
-
-/// Sets the CPU priority of running Roblox windows (Normal, or Below Normal). Returns how many changed.
-pub fn set_priority(helper: &Path, normal: bool) -> Result<String, String> {
-    let level = if normal { "normal" } else { "below" };
-    run(helper, &["priority", level], "")
-}
-
 /// Starts the helper that holds Roblox's single-instance lock. The caller keeps the child and kills it to turn this off.
 pub fn start_multi_instance(helper: &Path) -> Result<Child, String> {
     Command::new(helper)

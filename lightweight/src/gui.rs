@@ -4,6 +4,7 @@
 
 use crate::helper::{self, AccountInfo};
 use crate::store::{self, Account, Preset, Settings};
+use crate::winapi;
 use eframe::egui;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
@@ -452,12 +453,11 @@ impl App {
                 return;
             }
         };
-        match helper::resize_windows(&PathBuf::from(&self.helper_path), width, height) {
-            Ok(applied) if applied.trim().is_empty() => {
+        match winapi::resize_windows(width, height) {
+            Ok(applied) if applied.is_empty() => {
                 self.status = "No running Roblox windows to resize.".into()
             }
-            Ok(applied) => {
-                let sizes: Vec<&str> = applied.lines().collect();
+            Ok(sizes) => {
                 self.status = format!(
                     "Asked for {width}x{height}. Windows now: {}. Roblox may enforce a minimum size.",
                     sizes.join(", ")
@@ -468,11 +468,11 @@ impl App {
     }
 
     fn spread(&mut self) {
-        match helper::spread_across_cores(&PathBuf::from(&self.helper_path)) {
+        match winapi::spread_across_cores() {
             Ok(count) => {
                 self.status = format!(
                     "Spread {} running Roblox window(s) across CPU cores.",
-                    count.trim()
+                    count
                 )
             }
             Err(e) => self.status = format!("Could not spread windows: {e}"),
@@ -481,12 +481,9 @@ impl App {
 
     fn lower_priority(&mut self) {
         let normal = self.settings.cpu_priority_normal;
-        match helper::set_priority(&PathBuf::from(&self.helper_path), normal) {
+        match winapi::set_priority(normal) {
             Ok(count) => {
-                self.status = format!(
-                    "Lowered priority of {} running Roblox window(s).",
-                    count.trim()
-                )
+                self.status = format!("Lowered priority of {} running Roblox window(s).", count)
             }
             Err(e) => self.status = format!("Could not lower priority: {e}"),
         }
@@ -553,8 +550,8 @@ impl App {
             if cpu_share && launched > 0 {
                 // Roblox needs a moment to open its windows before they can be adjusted.
                 thread::sleep(Duration::from_secs(20));
-                let _ = helper::set_priority(&helper_path, cpu_normal);
-                let _ = helper::spread_across_cores(&helper_path);
+                let _ = winapi::set_priority(cpu_normal);
+                let _ = winapi::spread_across_cores();
             }
         });
 
