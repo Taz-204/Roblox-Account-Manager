@@ -115,7 +115,8 @@ pub fn start_multi_instance(helper: &Path) -> Result<Child, String> {
 
 /// Starts the game for the account whose cookie blob is given.
 /// An empty `job_id` joins any server; a job ID joins that specific server.
-pub fn launch(helper: &Path, blob: &str, place_id: u64, job_id: &str) -> Result<(), String> {
+/// Starts a client and returns its process ID (0 if it's unknown, e.g. for the link fallback).
+pub fn launch(helper: &Path, blob: &str, place_id: u64, job_id: &str) -> Result<u32, String> {
     let place = place_id.to_string();
     let job = job_id.trim();
     let args: Vec<&str> = if job.is_empty() {
@@ -123,7 +124,19 @@ pub fn launch(helper: &Path, blob: &str, place_id: u64, job_id: &str) -> Result<
     } else {
         vec!["launch", place.as_str(), job]
     };
-    run(helper, &args, blob).map(|_| ())
+    let output = run(helper, &args, blob)?;
+    // The helper answers with {"ok":true,"pid":N}.
+    let pid = output
+        .split("\"pid\":")
+        .nth(1)
+        .unwrap_or("")
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    Ok(pid)
 }
 
 #[cfg(all(test, unix))]

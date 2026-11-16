@@ -3,6 +3,7 @@
 //! multi-instance lock run in the background so the window keeps responding.
 
 use crate::helper::{self, AccountInfo};
+use crate::monitor::{self, Limits, Monitor};
 use crate::store::{self, Account, Preset, Settings};
 use crate::winapi;
 use eframe::egui;
@@ -10,11 +11,13 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
+    Home,
     Accounts,
     Presets,
     Settings,
@@ -48,6 +51,7 @@ enum Action {
     ApplyFps,
     ApplyLaunchDelay,
     ApplyGraphics,
+    ApplyLimits,
     LowerPriority,
     ApplyFlags,
     Spread,
@@ -86,6 +90,11 @@ pub struct App {
     multi_child: Option<Child>,
     pending_launch: Option<Receiver<String>>,
     pending_login: Option<PendingLogin>,
+    monitor: Monitor,
+    /// Process ID of each client this app started, mapped to the account name.
+    launched: Arc<Mutex<HashMap<u32, String>>>,
+    ram_text: String,
+    cpu_text: String,
 }
 
 impl App {
@@ -100,6 +109,12 @@ impl App {
         let settings_path = store::settings_path();
         let settings = store::load_settings(&settings_path).unwrap_or_default();
         let helper_path = helper::default_helper_path().to_string_lossy().into_owned();
+        let monitor = Monitor::start(Limits {
+            ram_mb: settings.ram_limit_mb,
+            cpu_percent: settings.cpu_limit_percent,
+        });
+        let ram_text = settings.ram_limit_mb.to_string();
+        let cpu_text = settings.cpu_limit_percent.to_string();
 
         let mut app = Self {
             path,
@@ -108,7 +123,7 @@ impl App {
             accounts,
             presets,
             settings: settings.clone(),
-            tab: Tab::Accounts,
+            tab: Tab::Home,
             selected: BTreeSet::new(),
             anchor: None,
             new_name: String::new(),
@@ -131,6 +146,10 @@ impl App {
             multi_child: None,
             pending_launch: None,
             pending_login: None,
+            monitor,
+            launched: Arc::new(Mutex::new(HashMap::new())),
+            ram_text,
+            cpu_text,
         };
 
         // Re-apply saved settings on startup.
@@ -429,6 +448,114 @@ impl App {
         }
     }
 
+    /// Account names whose launched client is currently running.
+    fn active_names(&self) -> HashSet<String> {
+        let running: HashSet<u32> = self.procs_snapshot().iter().map(|p| p.pid).collect();
+        self.launched
+            .lock()
+            .map(|map| {
+                map.iter()
+                    .filter(|(pid, _)| running.contains(pid))
+                    .map(|(_, name)| name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn procs_snapshot(&self) -> Vec<monitor::ProcInfo> {
+        self.monitor
+            .procs
+            .lock()
+            .map(|p| p.clone())
+            .unwrap_or_default()
+    }
+
+    fn home_tab(&self, ui: &mut egui::Ui) {
+        ui.heading("Home");
+        let procs = self.procs_snapshot();
+        let names: HashMap<u32, String> =
+            self.launched.lock().map(|m| m.clone()).unwrap_or_default();
+
+        let total_cpu: f32 = procs.iter().map(|p| p.cpu_percent).sum();
+        let total_mem: f32 = procs.iter().map(|p| p.memory_mb).sum();
+        ui.label(format!(
+            "{} running client(s). Total CPU {:.0}%, memory {:.0} MB. Updates every second.",
+            procs.len(),
+            total_cpu,
+            total_mem
+        ));
+        ui.separator();
+
+        if procs.is_empty() {
+            ui.label("No Roblox clients are running.");
+            return;
+        }
+
+        egui::Grid::new("home_grid")
+            .striped(true)
+            .num_columns(5)
+            .show(ui, |ui| {
+                ui.strong("Account");
+                ui.strong("PID");
+                ui.strong("CPU (all cores)");
+                ui.strong("Memory");
+                ui.strong("Limits");
+                ui.end_row();
+
+                for p in &procs {
+                    let name = names
+                        .get(&p.pid)
+                        .cloned()
+                        .unwrap_or_else(|| "Started outside this app".into());
+                    ui.label(name);
+                    ui.label(p.pid.to_string());
+                    ui.label(format!("{:.1}%", p.cpu_percent));
+                    ui.label(format!("{:.0} MB", p.memory_mb));
+                    let mut limits = Vec::new();
+                    if p.cpu_limited {
+                        limits.push("CPU");
+                    }
+                    if p.ram_limited {
+                        limits.push("RAM");
+                    }
+                    ui.label(if limits.is_empty() {
+                        "none".to_string()
+                    } else {
+                        limits.join(", ")
+                    });
+                    ui.end_row();
+                }
+            });
+    }
+
+    fn apply_limits(&mut self) {
+        let ram = match self.ram_text.trim().parse::<u32>() {
+            Ok(0) => 0,
+            Ok(mb) if mb >= 64 => mb,
+            _ => {
+                self.status = "RAM limit must be 0 (off) or at least 64 MB.".into();
+                return;
+            }
+        };
+        let cpu = match self.cpu_text.trim().parse::<u32>() {
+            Ok(p) if p <= 100 => p,
+            _ => {
+                self.status = "CPU limit must be 0 (off) to 100 percent.".into();
+                return;
+            }
+        };
+        self.settings.ram_limit_mb = ram;
+        self.settings.cpu_limit_percent = cpu;
+        self.persist_settings();
+        if let Ok(mut limits) = self.monitor.limits.lock() {
+            *limits = Limits {
+                ram_mb: ram,
+                cpu_percent: cpu,
+            };
+        }
+        self.status = "Limits saved. They apply to Roblox clients that start from now on.".into();
+    }
+
     fn apply_flags(&mut self) {
         // The helper checks that the JSON is a valid flags object. Only a accepted set is saved,
         // so a bad entry is never retried at startup.
@@ -539,6 +666,7 @@ impl App {
         let cpu_share = self.settings.cpu_share_on_launch;
         let cpu_normal = self.settings.cpu_priority_normal;
 
+        let launched_map = self.launched.clone();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             if let Some((fps, graphics, flags)) = prelaunch {
@@ -569,7 +697,14 @@ impl App {
                     thread::sleep(delay);
                 }
                 match helper::launch(&helper_path, &blob, place_id, &job_id) {
-                    Ok(()) => launched += 1,
+                    Ok(pid) => {
+                        launched += 1;
+                        if pid > 0 {
+                            if let Ok(mut map) = launched_map.lock() {
+                                map.insert(pid, name.clone());
+                            }
+                        }
+                    }
                     Err(e) => failed.push(format!("{name}: {e}")),
                 }
             }
@@ -631,6 +766,7 @@ impl App {
     }
 
     fn accounts_list(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let active = self.active_names();
         for (i, account) in self.accounts.iter().enumerate() {
             let is_selected = self.selected.contains(&i);
             let stroke = if is_selected {
@@ -665,6 +801,11 @@ impl App {
                             format!("{}  -  {}", account.name, account.note)
                         };
                         let response = ui.selectable_label(is_selected, label);
+                        if active.contains(&account.name) {
+                            ui.colored_label(egui::Color32::from_rgb(40, 160, 60), "Active");
+                        } else {
+                            ui.colored_label(egui::Color32::GRAY, "Inactive");
+                        }
                         if response.clicked() {
                             let modifiers = ui.input(|input| input.modifiers);
                             actions.push(Action::Select {
@@ -816,6 +957,19 @@ impl App {
         });
 
         ui.separator();
+        ui.label("Limits for Roblox clients: they apply to clients that start after you save them. Running clients keep their current limits.");
+        ui.horizontal(|ui| {
+            ui.label("RAM limit per client (MB, 0 = off, minimum 64):");
+            ui.add(egui::TextEdit::singleline(&mut self.ram_text).desired_width(80.0));
+        });
+        ui.horizontal(|ui| {
+            ui.label("CPU limit per client (% of all cores, 0 = off):");
+            ui.add(egui::TextEdit::singleline(&mut self.cpu_text).desired_width(80.0));
+        });
+        if ui.button("Save limits").clicked() {
+            actions.push(Action::ApplyLimits);
+        }
+        ui.separator();
         ui.label("CPU sharing: after each launch, set the priority of Roblox windows and spread them across cores. Applies about 20 seconds after launch.");
         if ui
             .checkbox(
@@ -890,6 +1044,8 @@ impl Drop for App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Keep the Home stats updating even when the mouse is still.
+        ctx.request_repaint_after(Duration::from_secs(1));
         // Pick up background results.
         let launch_done = self
             .pending_launch
@@ -920,6 +1076,7 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 for (tab, label) in [
+                    (Tab::Home, "Home"),
                     (Tab::Accounts, "Accounts"),
                     (Tab::Presets, "Presets"),
                     (Tab::Settings, "Settings"),
@@ -952,6 +1109,7 @@ impl eframe::App for App {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+            Tab::Home => self.home_tab(ui),
             Tab::Accounts => self.accounts_tab(ui, &mut actions),
             Tab::Presets => self.presets_tab(ui, &mut actions),
             Tab::Settings => self.settings_tab(ui, &mut actions),
@@ -991,6 +1149,7 @@ impl eframe::App for App {
                 Action::ApplyFps => self.apply_fps(),
                 Action::ApplyLaunchDelay => self.apply_launch_delay(),
                 Action::ApplyGraphics => self.apply_graphics(),
+                Action::ApplyLimits => self.apply_limits(),
                 Action::LowerPriority => self.lower_priority(),
                 Action::ApplyFlags => self.apply_flags(),
                 Action::Spread => self.spread(),

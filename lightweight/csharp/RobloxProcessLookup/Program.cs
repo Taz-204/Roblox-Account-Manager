@@ -99,8 +99,8 @@ static class Program
                     if (!long.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out placeId))
                         return Fail("place id must be a number");
                     string jobId = args.Length > 2 ? args[2] : null;
-                    RobloxLauncher.Launch(RobloxLauncher.Unprotect(ReadStdinLine()), placeId, jobId);
-                    Console.WriteLine("{\"ok\":true}");
+                    int pid = RobloxLauncher.Launch(RobloxLauncher.Unprotect(ReadStdinLine()), placeId, jobId);
+                    Console.WriteLine("{\"ok\":true,\"pid\":" + pid + "}");
                     return 0;
 
                 default:

@@ -105,7 +105,7 @@ static class RobloxLauncher
     }
 
     // Starts the game for the account. An empty jobId joins any server; a job ID joins that server.
-    public static void Launch(string cookie, long placeId, string jobId)
+    public static int Launch(string cookie, long placeId, string jobId)
     {
         string csrf = GetCsrfToken(cookie);
         string ticket = GetTicket(cookie, csrf);
@@ -134,7 +134,7 @@ static class RobloxLauncher
             };
             Process started = Process.Start(info);
             if (started == null) throw new InvalidOperationException("Windows did not start RobloxPlayerBeta.exe.");
-            return;
+            return started.Id;
         }
 
         // Fallback: the roblox-player: link, which only works if Roblox registered that link.
@@ -145,6 +145,7 @@ static class RobloxLauncher
             + "+robloxLocale:en_us+gameLocale:en_us+channel:+LaunchExp:InApp";
 
         Process.Start(new ProcessStartInfo { FileName = link, UseShellExecute = true });
+        return 0;
     }
 
     // Sets the FPS cap in Roblox's client settings. 0 removes the cap.

@@ -38,6 +38,10 @@ pub struct Settings {
     pub cpu_share_on_launch: bool,
     /// Use Normal priority instead of Below Normal when sharing CPU.
     pub cpu_priority_normal: bool,
+    /// RAM cap for each Roblox client, in MB. 0 means off.
+    pub ram_limit_mb: u32,
+    /// CPU cap for each Roblox client, as a percent of all cores. 0 means off.
+    pub cpu_limit_percent: u32,
 }
 
 impl Default for Settings {
@@ -49,6 +53,8 @@ impl Default for Settings {
             graphics_level: 0,
             cpu_share_on_launch: false,
             cpu_priority_normal: false,
+            ram_limit_mb: 0,
+            cpu_limit_percent: 0,
         }
     }
 }
@@ -173,6 +179,8 @@ pub fn parse_settings(text: &str) -> Settings {
             "graphics_level" => settings.graphics_level = value.trim().parse().unwrap_or(0),
             "cpu_share_on_launch" => settings.cpu_share_on_launch = value.trim() == "true",
             "cpu_priority_normal" => settings.cpu_priority_normal = value.trim() == "true",
+            "ram_limit_mb" => settings.ram_limit_mb = value.trim().parse().unwrap_or(0),
+            "cpu_limit_percent" => settings.cpu_limit_percent = value.trim().parse().unwrap_or(0),
             "launch_delay_ms" => {
                 settings.launch_delay_ms = value
                     .trim()
@@ -187,13 +195,15 @@ pub fn parse_settings(text: &str) -> Settings {
 
 pub fn format_settings(settings: &Settings) -> String {
     format!(
-        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\n",
+        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\n",
         settings.multi_instance,
         settings.fps_cap,
         settings.launch_delay_ms,
         settings.graphics_level,
         settings.cpu_share_on_launch,
-        settings.cpu_priority_normal
+        settings.cpu_priority_normal,
+        settings.ram_limit_mb,
+        settings.cpu_limit_percent
     )
 }
 
@@ -350,6 +360,8 @@ mod tests {
             graphics_level: 7,
             cpu_share_on_launch: true,
             cpu_priority_normal: true,
+            ram_limit_mb: 512,
+            cpu_limit_percent: 40,
         };
         assert_eq!(parse_settings(&format_settings(&settings)), settings);
     }

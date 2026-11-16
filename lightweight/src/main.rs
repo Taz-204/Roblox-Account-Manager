@@ -4,6 +4,7 @@
 //! Command-line only:     cargo run -- --cli   (or build without the gui feature)
 
 mod helper;
+mod monitor;
 mod store;
 mod winapi;
 

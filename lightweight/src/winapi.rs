@@ -5,7 +5,18 @@
 
 #[cfg(windows)]
 mod imp {
+    use std::ffi::c_void;
     use std::mem::size_of;
+
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOBOBJECTINFOCLASS, SetInformationJobObject,
+    };
+    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows::Win32::System::Threading::{
+        PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE, PROCESS_VM_READ,
+        QUOTA_LIMITS_HARDWS_MAX_ENABLE, SetProcessWorkingSetSizeEx,
+    };
+    use windows::core::PCWSTR;
 
     use windows::Win32::Foundation::{BOOL, CloseHandle, FILETIME, HANDLE, HWND, LPARAM, RECT};
     use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -208,6 +219,118 @@ mod imp {
         }
         Ok(changed)
     }
+    /// Number of logical CPU cores.
+    pub fn cores() -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    }
+
+    /// Process IDs of running Roblox clients. Empty if the list can't be read.
+    pub fn roblox_process_ids() -> Vec<u32> {
+        roblox_pids().unwrap_or_default()
+    }
+
+    fn filetime_to_u64(ft: FILETIME) -> u64 {
+        ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64
+    }
+
+    /// CPU time (100 ns units, user plus kernel) and working-set size for one process.
+    pub fn sample(pid: u32) -> Option<ProcSample> {
+        let handle =
+            unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) }.ok()?;
+        let mut created = FILETIME::default();
+        let mut exited = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        let times_ok =
+            unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) }
+                .is_ok();
+
+        let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+        let cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        counters.cb = cb;
+        let mem_ok = unsafe { GetProcessMemoryInfo(handle, &mut counters, cb) }.as_bool();
+
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        if !times_ok {
+            return None;
+        }
+        Some(ProcSample {
+            cpu_100ns: filetime_to_u64(kernel) + filetime_to_u64(user),
+            working_set: if mem_ok {
+                counters.WorkingSetSize as u64
+            } else {
+                0
+            },
+        })
+    }
+
+    /// Caps the process's physical memory (working set) at `megabytes`. Extra memory is paged out
+    /// rather than the client being stopped.
+    pub fn limit_ram(pid: u32, megabytes: u32) -> Result<(), String> {
+        let access = PROCESS_SET_QUOTA | PROCESS_QUERY_INFORMATION;
+        let handle = unsafe { OpenProcess(access, false, pid) }.map_err(|e| e.to_string())?;
+        let max = megabytes as usize * 1024 * 1024;
+        let min = (1024 * 1024usize).min(max);
+        let result =
+            unsafe { SetProcessWorkingSetSizeEx(handle, min, max, QUOTA_LIMITS_HARDWS_MAX_ENABLE) }
+                .map_err(|e| e.to_string());
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        result
+    }
+
+    /// Hard CPU cap for the process, as a percent of all cores. It runs inside its own Job Object.
+    pub fn limit_cpu(pid: u32, percent: u32) -> Result<(), String> {
+        if !(1..=100).contains(&percent) {
+            return Err("CPU limit must be 1 to 100 percent".into());
+        }
+        let access = PROCESS_SET_QUOTA | PROCESS_TERMINATE;
+        let process = unsafe { OpenProcess(access, false, pid) }.map_err(|e| e.to_string())?;
+
+        let result = (|| -> Result<(), String> {
+            let job =
+                unsafe { CreateJobObjectW(None, PCWSTR::null()) }.map_err(|e| e.to_string())?;
+            // CpuRate is in 1/100 of a percent, so 100% is 10000.
+            let info = CpuRateInfo {
+                control_flags: JOB_CPU_ENABLE | JOB_CPU_HARD_CAP,
+                cpu_rate: percent * 100,
+            };
+            let set = unsafe {
+                SetInformationJobObject(
+                    job,
+                    JOBOBJECTINFOCLASS(JOB_CPU_RATE_CONTROL_CLASS),
+                    &info as *const CpuRateInfo as *const c_void,
+                    size_of::<CpuRateInfo>() as u32,
+                )
+            };
+            let assigned = set.and_then(|_| unsafe { AssignProcessToJobObject(job, process) });
+            // The job keeps the limit while the process runs, so this handle can be closed.
+            unsafe {
+                let _ = CloseHandle(job);
+            }
+            assigned.map_err(|e| e.to_string())
+        })();
+
+        unsafe {
+            let _ = CloseHandle(process);
+        }
+        result
+    }
+
+    /// Layout of JOBOBJECT_CPU_RATE_CONTROL_INFORMATION: a flags word and a rate.
+    #[repr(C)]
+    struct CpuRateInfo {
+        control_flags: u32,
+        cpu_rate: u32,
+    }
+    const JOB_CPU_ENABLE: u32 = 0x1;
+    const JOB_CPU_HARD_CAP: u32 = 0x4;
+    const JOB_CPU_RATE_CONTROL_CLASS: i32 = 15;
 }
 
 #[cfg(not(windows))]
@@ -225,7 +348,39 @@ mod imp {
     pub fn spread_across_cores() -> Result<usize, String> {
         Err(ONLY_WINDOWS.into())
     }
+
+    pub fn cores() -> usize {
+        1
+    }
+
+    pub fn roblox_process_ids() -> Vec<u32> {
+        Vec::new()
+    }
+
+    pub fn sample(_pid: u32) -> Option<super::ProcSample> {
+        None
+    }
+
+    pub fn limit_ram(_pid: u32, _megabytes: u32) -> Result<(), String> {
+        Err(ONLY_WINDOWS.into())
+    }
+
+    pub fn limit_cpu(_pid: u32, _percent: u32) -> Result<(), String> {
+        Err(ONLY_WINDOWS.into())
+    }
+}
+
+/// CPU time and memory for one Roblox process.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcSample {
+    /// User plus kernel CPU time, in 100 ns units.
+    pub cpu_100ns: u64,
+    /// Physical memory in use, in bytes.
+    pub working_set: u64,
 }
 
 #[allow(unused_imports)]
-pub use imp::{resize_windows, set_priority, spread_across_cores};
+pub use imp::{
+    cores, limit_cpu, limit_ram, resize_windows, roblox_process_ids, sample, set_priority,
+    spread_across_cores,
+};
