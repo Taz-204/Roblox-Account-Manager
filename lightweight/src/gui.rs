@@ -178,10 +178,11 @@ impl App {
             "job "
         };
 
+        let thread_name = name.clone();
         thread::spawn(move || {
             let message = match helper::launch(&helper_path, &blob, place_id, &job_id) {
-                Ok(()) => format!("Launched {name} in place {place_id}."),
-                Err(e) => format!("Launch failed for {name}: {e}"),
+                Ok(()) => format!("Launched {thread_name} in place {place_id}."),
+                Err(e) => format!("Launch failed for {thread_name}: {e}"),
             };
             let _ = tx.send(message);
         });
