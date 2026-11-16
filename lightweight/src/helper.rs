@@ -52,9 +52,22 @@ pub fn protect(helper: &Path, cookie: &str) -> Result<String, String> {
     run(helper, &["protect"], cookie.trim())
 }
 
+/// Opens a Roblox login window. Returns the encrypted cookie blob once the user has signed in.
+pub fn login(helper: &Path) -> Result<String, String> {
+    run(helper, &["login"], "")
+}
+
 /// Starts the game for the account whose cookie blob is given.
-pub fn launch(helper: &Path, blob: &str, place_id: u64) -> Result<(), String> {
-    run(helper, &["launch", &place_id.to_string()], blob).map(|_| ())
+/// An empty `job_id` joins any server; a job ID joins that specific server.
+pub fn launch(helper: &Path, blob: &str, place_id: u64, job_id: &str) -> Result<(), String> {
+    let place = place_id.to_string();
+    let job = job_id.trim();
+    let args: Vec<&str> = if job.is_empty() {
+        vec!["launch", &place]
+    } else {
+        vec!["launch", &place, job]
+    };
+    run(helper, &args, blob).map(|_| ())
 }
 
 #[cfg(all(test, unix))]
@@ -86,7 +99,8 @@ mod tests {
     #[test]
     fn launch_sends_place_and_blob() {
         let helper = fake_helper("launch");
-        assert!(launch(&helper, "BLOB", 42).is_ok());
+        assert!(launch(&helper, "BLOB", 42, "").is_ok());
+        assert!(launch(&helper, "BLOB", 42, "job-123").is_ok());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! egui window: account list on the left, details and actions on the right.
-//! Built only with `--features gui`. Launching runs in the background so the
-//! window keeps responding while the helper talks to Roblox.
+//! Built only with `--features gui`. Launching and browser login run in the
+//! background so the window keeps responding.
 
 use crate::helper;
 use crate::store::{self, Account};
@@ -8,6 +8,13 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+
+/// A browser login in progress: the account name it's for, and where the result will arrive.
+struct PendingLogin {
+    name: String,
+    note: String,
+    result: Receiver<Result<String, String>>,
+}
 
 pub struct App {
     path: PathBuf,
@@ -17,9 +24,11 @@ pub struct App {
     new_note: String,
     new_cookie: String,
     place_id: String,
+    job_id: String,
     helper_path: String,
     status: String,
-    pending: Option<Receiver<String>>,
+    pending_launch: Option<Receiver<String>>,
+    pending_login: Option<PendingLogin>,
 }
 
 impl App {
@@ -36,9 +45,11 @@ impl App {
             new_note: String::new(),
             new_cookie: String::new(),
             place_id: String::new(),
+            job_id: String::new(),
             helper_path: helper::default_helper_path().to_string_lossy().into_owned(),
             status,
-            pending: None,
+            pending_launch: None,
+            pending_login: None,
         }
     }
 
@@ -48,22 +59,25 @@ impl App {
         }
     }
 
+    fn name_is_free(&self, name: &str) -> bool {
+        !self
+            .accounts
+            .iter()
+            .any(|a| a.name.eq_ignore_ascii_case(name))
+    }
+
     fn add_account(&mut self) {
         let name = store::clean_field(&self.new_name);
         if name.is_empty() {
             self.status = "Enter an account name.".into();
             return;
         }
-        if self
-            .accounts
-            .iter()
-            .any(|a| a.name.eq_ignore_ascii_case(&name))
-        {
+        if !self.name_is_free(&name) {
             self.status = format!("'{name}' already exists.");
             return;
         }
 
-        // Encrypt the cookie before anything is stored. The field is cleared either way.
+        // Encrypt the pasted cookie before anything is stored. The field is cleared either way.
         let cookie = std::mem::take(&mut self.new_cookie);
         let cookie_blob = if cookie.trim().is_empty() {
             String::new()
@@ -90,6 +104,35 @@ impl App {
         self.status = format!("Added {name}.");
     }
 
+    fn start_browser_login(&mut self) {
+        if self.pending_login.is_some() {
+            self.status = "A login window is already open.".into();
+            return;
+        }
+        let name = store::clean_field(&self.new_name);
+        if name.is_empty() {
+            self.status = "Enter an account name first, then log in.".into();
+            return;
+        }
+        if !self.name_is_free(&name) {
+            self.status = format!("'{name}' already exists.");
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let helper_path = PathBuf::from(&self.helper_path);
+        thread::spawn(move || {
+            let _ = tx.send(helper::login(&helper_path));
+        });
+
+        self.pending_login = Some(PendingLogin {
+            name: name.clone(),
+            note: store::clean_field(&self.new_note),
+            result: rx,
+        });
+        self.status = format!("Log in to Roblox in the window for {name}...");
+    }
+
     fn remove_selected(&mut self) {
         if let Some(i) = self.selected.take() {
             if i < self.accounts.len() {
@@ -101,7 +144,7 @@ impl App {
     }
 
     fn launch_selected(&mut self) {
-        if self.pending.is_some() {
+        if self.pending_launch.is_some() {
             self.status = "Still launching the previous game. Please wait.".into();
             return;
         }
@@ -111,7 +154,7 @@ impl App {
         };
         if account.cookie_blob.is_empty() {
             self.status = format!(
-                "{} has no saved cookie. Remove it and add it again with a cookie.",
+                "{} has no saved cookie. Log in again or add a cookie.",
                 account.name
             );
             return;
@@ -128,33 +171,71 @@ impl App {
         let helper_path = PathBuf::from(&self.helper_path);
         let blob = account.cookie_blob.clone();
         let name = account.name.clone();
+        let job_id = self.job_id.trim().to_string();
+        let joining = if job_id.is_empty() {
+            "any server"
+        } else {
+            "job "
+        };
 
         thread::spawn(move || {
-            let message = match helper::launch(&helper_path, &blob, place_id) {
+            let message = match helper::launch(&helper_path, &blob, place_id, &job_id) {
                 Ok(()) => format!("Launched {name} in place {place_id}."),
                 Err(e) => format!("Launch failed for {name}: {e}"),
             };
             let _ = tx.send(message);
         });
 
-        self.pending = Some(rx);
-        self.status = "Launching...".into();
+        self.pending_launch = Some(rx);
+        self.status = format!("Launching {name} into {joining}...");
     }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Pick up the result of a background launch.
-        let finished = self.pending.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(message) = finished {
+        let launch_done = self
+            .pending_launch
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+        if let Some(message) = launch_done {
             self.status = message;
-            self.pending = None;
-        } else if self.pending.is_some() {
+            self.pending_launch = None;
+        }
+
+        // Pick up the result of a browser login: save the account if it worked.
+        let login_done = self
+            .pending_login
+            .as_ref()
+            .and_then(|p| p.result.try_recv().ok());
+        if let Some(result) = login_done {
+            if let Some(login) = self.pending_login.take() {
+                match result {
+                    Ok(blob) if !blob.is_empty() => {
+                        self.accounts.push(Account {
+                            name: login.name.clone(),
+                            note: login.note,
+                            cookie_blob: blob,
+                        });
+                        self.selected = Some(self.accounts.len() - 1);
+                        self.new_name.clear();
+                        self.new_note.clear();
+                        self.persist();
+                        self.status = format!("Logged in and saved {}.", login.name);
+                    }
+                    Ok(_) => self.status = "Login did not return a cookie.".into(),
+                    Err(e) => self.status = format!("Login failed: {e}"),
+                }
+            }
+        }
+
+        if self.pending_launch.is_some() || self.pending_login.is_some() {
             ctx.request_repaint();
         }
 
         // Actions are collected here and applied after the panels are drawn.
         let mut add = false;
+        let mut login = false;
         let mut remove = false;
         let mut launch = false;
         let mut note_changed = false;
@@ -216,6 +297,10 @@ impl eframe::App for App {
             ui.separator();
             ui.heading("Launch");
             ui.add(egui::TextEdit::singleline(&mut self.place_id).hint_text("Place ID"));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.job_id)
+                    .hint_text("Job ID (optional, joins that exact server)"),
+            );
             if ui.button("Launch selected account").clicked() {
                 launch = true;
             }
@@ -224,14 +309,19 @@ impl eframe::App for App {
             ui.heading("Add account");
             ui.add(egui::TextEdit::singleline(&mut self.new_name).hint_text("Account name"));
             ui.add(egui::TextEdit::singleline(&mut self.new_note).hint_text("Note (optional)"));
+            ui.horizontal(|ui| {
+                if ui.button("Log in with browser").clicked() {
+                    login = true;
+                }
+                if ui.button("Add with pasted cookie").clicked() {
+                    add = true;
+                }
+            });
             ui.add(
                 egui::TextEdit::singleline(&mut self.new_cookie)
-                    .hint_text(".ROBLOSECURITY cookie (optional)")
+                    .hint_text("Or paste a .ROBLOSECURITY cookie")
                     .password(true),
             );
-            if ui.button("Add account").clicked() {
-                add = true;
-            }
 
             ui.separator();
             ui.collapsing("Helper settings", |ui| {
@@ -245,6 +335,9 @@ impl eframe::App for App {
         }
         if add {
             self.add_account();
+        }
+        if login {
+            self.start_browser_login();
         }
         if remove {
             self.remove_selected();

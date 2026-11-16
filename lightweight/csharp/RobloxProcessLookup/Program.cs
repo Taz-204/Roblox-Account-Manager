@@ -2,7 +2,8 @@
 //
 //   RobloxProcessLookup.exe                 Print running Roblox game processes as JSON.
 //   RobloxProcessLookup.exe protect         Read a .ROBLOSECURITY cookie from stdin and print it encrypted (base64).
-//   RobloxProcessLookup.exe launch <placeId>  Read an encrypted cookie from stdin and start the game.
+//   RobloxProcessLookup.exe launch <placeId> [jobId]  Read an encrypted cookie from stdin and start the game.
+//   RobloxProcessLookup.exe login           Open a Roblox login window and print the encrypted cookie.
 //
 // Errors go to stderr with exit code 1. Cookies are never printed.
 using System;
@@ -14,6 +15,7 @@ using System.Text;
 
 static class Program
 {
+    [STAThread]
     static int Main(string[] args)
     {
         try
@@ -26,12 +28,19 @@ static class Program
                     Console.WriteLine(RobloxLauncher.Protect(ReadStdinLine()));
                     return 0;
 
+                case "login":
+                    string cookie = BrowserLogin.Run();
+                    if (string.IsNullOrEmpty(cookie)) return Fail("login was cancelled");
+                    Console.WriteLine(RobloxLauncher.Protect(cookie));
+                    return 0;
+
                 case "launch":
-                    if (args.Length < 2) return Fail("usage: launch <placeId>");
+                    if (args.Length < 2) return Fail("usage: launch <placeId> [jobId]");
                     long placeId;
                     if (!long.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out placeId))
                         return Fail("place id must be a number");
-                    RobloxLauncher.Launch(RobloxLauncher.Unprotect(ReadStdinLine()), placeId);
+                    string jobId = args.Length > 2 ? args[2] : null;
+                    RobloxLauncher.Launch(RobloxLauncher.Unprotect(ReadStdinLine()), placeId, jobId);
                     Console.WriteLine("{\"ok\":true}");
                     return 0;
 

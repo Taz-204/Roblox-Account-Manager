@@ -36,7 +36,7 @@ static class RobloxLauncher
     }
 
     // Starts the game for the account. Throws if the cookie is expired or Roblox refuses.
-    public static void Launch(string cookie, long placeId)
+    public static void Launch(string cookie, long placeId, string jobId)
     {
         string csrf = GetCsrfToken(cookie);
         string ticket = GetTicket(cookie, csrf);
@@ -45,9 +45,11 @@ static class RobloxLauncher
         string browserTrackerId = random.Next(100000, 175000).ToString() + random.Next(100000, 900000).ToString();
         long launchTime = (long)Math.Floor((DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds * 1000);
 
-        string placeLauncher = "https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGame"
+        bool hasJob = !string.IsNullOrEmpty(jobId);
+        string placeLauncher = "https://assetgame.roblox.com/game/PlaceLauncher.ashx?request=RequestGame" + (hasJob ? "Job" : "")
             + "&browserTrackerId=" + browserTrackerId
             + "&placeId=" + placeId
+            + (hasJob ? "&gameId=" + HttpUtility.UrlEncode(jobId) : "")
             + "&isPlayTogetherGame=false";
 
         string link = "roblox-player:1+launchmode:play+gameinfo:" + ticket

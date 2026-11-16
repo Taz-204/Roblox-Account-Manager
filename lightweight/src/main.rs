@@ -84,7 +84,7 @@ fn print_help() {
   remove <name>            Remove an account
   note <name> <text...>    Change an account's note
   open <place_id>          Open a Roblox place in the default-signed-in client
-  launch <name> <place_id> Launch a place for an account that has a saved cookie
+  launch <name> <place_id> [job_id]  Launch a place for an account that has a saved cookie
   help                     Show this help
   quit                     Exit"
     );
@@ -164,7 +164,13 @@ fn run_command(line: &str, accounts: &mut Vec<Account>, path: &PathBuf) -> Resul
             if account.cookie_blob.is_empty() {
                 return Err(format!("'{name}' has no saved cookie"));
             }
-            helper::launch(&helper::default_helper_path(), &account.cookie_blob, id)?;
+            let job = rest.get(2).copied().unwrap_or("");
+            helper::launch(
+                &helper::default_helper_path(),
+                &account.cookie_blob,
+                id,
+                job,
+            )?;
             println!("Launched {name} in place {id}");
         }
         "help" | "?" => print_help(),
