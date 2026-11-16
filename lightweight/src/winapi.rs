@@ -12,15 +12,24 @@ mod imp {
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOBOBJECTINFOCLASS, SetInformationJobObject,
     };
-    use windows::Win32::System::ProcessStatus::{
-        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, SetProcessWorkingSetSizeEx,
-    };
+    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows::Win32::System::Threading::{
         PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE, PROCESS_VM_READ,
     };
 
     /// Lets the working-set maximum be enforced (the value from the Windows headers).
     const QUOTA_LIMITS_HARDWS_MAX_ENABLE: u32 = 0x8;
+
+    // Declared directly, because this version of the windows crate doesn't expose it.
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetProcessWorkingSetSizeEx(
+            hprocess: HANDLE,
+            dwminimumworkingsetsize: usize,
+            dwmaximumworkingsetsize: usize,
+            flags: u32,
+        ) -> BOOL;
+    }
     use windows::core::PCWSTR;
 
     use windows::Win32::Foundation::{BOOL, CloseHandle, FILETIME, HANDLE, HWND, LPARAM, RECT};
@@ -280,9 +289,14 @@ mod imp {
         let handle = unsafe { OpenProcess(access, false, pid) }.map_err(|e| e.to_string())?;
         let max = megabytes as usize * 1024 * 1024;
         let min = (1024 * 1024usize).min(max);
-        let result =
+        let accepted =
             unsafe { SetProcessWorkingSetSizeEx(handle, min, max, QUOTA_LIMITS_HARDWS_MAX_ENABLE) }
-                .map_err(|e| e.to_string());
+                .as_bool();
+        let result = if accepted {
+            Ok(())
+        } else {
+            Err("Windows did not accept the RAM limit".to_string())
+        };
         unsafe {
             let _ = CloseHandle(handle);
         }
