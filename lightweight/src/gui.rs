@@ -47,6 +47,8 @@ enum Action {
     ApplyLaunchDelay,
     ApplyGraphics,
     LowerPriority,
+    ApplyFlags,
+    Spread,
 }
 
 pub struct App {
@@ -70,6 +72,7 @@ pub struct App {
     fps_text: String,
     delay_text: String,
     graphics_text: String,
+    flags_text: String,
     helper_path: String,
     status: String,
     avatars: HashMap<String, Vec<u8>>,
@@ -112,6 +115,7 @@ impl App {
             fps_text: settings.fps_cap.to_string(),
             delay_text: settings.launch_delay_ms.to_string(),
             graphics_text: settings.graphics_level.to_string(),
+            flags_text: store::read_text(&store::flags_path()).unwrap_or_default(),
             helper_path,
             status,
             avatars: HashMap::new(),
@@ -128,6 +132,11 @@ impl App {
         if settings.fps_cap > 0 {
             if let Err(e) = helper::set_fps(&PathBuf::from(&app.helper_path), settings.fps_cap) {
                 app.status = format!("Could not apply saved FPS cap: {e}");
+            }
+        }
+        if !app.flags_text.trim().is_empty() {
+            if let Err(e) = helper::apply_flags(&PathBuf::from(&app.helper_path), &app.flags_text) {
+                app.status = format!("Could not apply saved flags: {e}");
             }
         }
         if settings.graphics_level > 0 {
@@ -409,6 +418,32 @@ impl App {
                 self.persist_settings();
             }
             _ => self.status = "Graphics quality must be 0 to 10 (0 removes the override).".into(),
+        }
+    }
+
+    fn apply_flags(&mut self) {
+        // The helper checks that the JSON is a valid flags object. Only a accepted set is saved,
+        // so a bad entry is never retried at startup.
+        let text = self.flags_text.trim().to_string();
+        let helper_path = PathBuf::from(&self.helper_path);
+        match helper::apply_flags(&helper_path, &text) {
+            Ok(()) => match store::write_text(&store::flags_path(), &text) {
+                Ok(()) => self.status = "Flags saved and written. Restart Roblox to apply.".into(),
+                Err(e) => self.status = format!("Flags applied, but could not save them: {e}"),
+            },
+            Err(e) => self.status = format!("Flags rejected: {e}"),
+        }
+    }
+
+    fn spread(&mut self) {
+        match helper::spread_across_cores(&PathBuf::from(&self.helper_path)) {
+            Ok(count) => {
+                self.status = format!(
+                    "Spread {} running Roblox window(s) across CPU cores.",
+                    count.trim()
+                )
+            }
+            Err(e) => self.status = format!("Could not spread windows: {e}"),
         }
     }
 
@@ -704,6 +739,24 @@ impl App {
         }
 
         ui.separator();
+        ui.label("Roblox client flags (JSON object), e.g. { \"FlagName\": value }. Applied to every window. Restart Roblox to apply. Flags can be reset by a Roblox update, so reapply after updating.");
+        ui.add(
+            egui::TextEdit::multiline(&mut self.flags_text)
+                .desired_rows(5)
+                .desired_width(f32::INFINITY)
+                .code_editor(),
+        );
+        if ui.button("Save and apply flags").clicked() {
+            actions.push(Action::ApplyFlags);
+        }
+
+        ui.separator();
+        ui.label("Spread running Roblox windows across CPU cores so they don't all compete for the same ones.");
+        if ui.button("Spread windows across cores").clicked() {
+            actions.push(Action::Spread);
+        }
+
+        ui.separator();
         ui.collapsing("Helper settings", |ui| {
             ui.label("Path to RobloxProcessLookup.exe:");
             ui.text_edit_singleline(&mut self.helper_path);
@@ -820,6 +873,8 @@ impl eframe::App for App {
                 Action::ApplyLaunchDelay => self.apply_launch_delay(),
                 Action::ApplyGraphics => self.apply_graphics(),
                 Action::LowerPriority => self.lower_priority(),
+                Action::ApplyFlags => self.apply_flags(),
+                Action::Spread => self.spread(),
             }
         }
     }

@@ -6,6 +6,8 @@
 //   RobloxProcessLookup.exe login           Open a Roblox login window. Prints the encrypted cookie, username, and user id.
 //   RobloxProcessLookup.exe fps <n>         Set the Roblox FPS cap (0 removes it).
 //   RobloxProcessLookup.exe graphics <1-10>  Set the Roblox graphics quality override (0 removes it).
+//   RobloxProcessLookup.exe flags           Read a JSON object of client flags from stdin and write them to Roblox's settings.
+//   RobloxProcessLookup.exe spread          Give each running Roblox window its own group of CPU cores. Prints the count.
 //   RobloxProcessLookup.exe priority        Lower the CPU priority of running Roblox windows. Prints the count.
 //   RobloxProcessLookup.exe avatar <userId> <path>  Save the account's headshot as a PNG.
 //   RobloxProcessLookup.exe multi-instance  Hold Roblox's single-instance lock. Runs until ended.
@@ -54,6 +56,14 @@ static class Program
                     if (!int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out level) || level < 0 || level > 10)
                         return Fail("graphics level must be 0 to 10");
                     Console.WriteLine(RobloxLauncher.SetGraphicsLevel(level));
+                    return 0;
+
+                case "flags":
+                    Console.WriteLine(RobloxLauncher.ApplyCustomFlags(Console.In.ReadToEnd()));
+                    return 0;
+
+                case "spread":
+                    Console.WriteLine(RobloxLauncher.SpreadAcrossCores());
                     return 0;
 
                 case "priority":

@@ -22,6 +22,7 @@ static class RobloxLauncher
     const string Referer = "https://www.roblox.com/games/4924922222/Brookhaven-RP";
     const string FpsKey = "DFIntTaskSchedulerTargetFps";
     const string GraphicsKey = "DFIntDebugFRMQualityLevelOverride";
+    const string CustomKeysFile = "rbx-alt-manager-flags.txt";
 
     static RobloxLauncher()
     {
@@ -158,6 +159,82 @@ static class RobloxLauncher
         return SetClientSetting(GraphicsKey, level > 0 ? (object)level : null);
     }
 
+    // Writes the user's own client flags into ClientAppSettings.json. Flags written last time
+    // (listed in a sidecar file) are removed first, so deleting a flag in the editor really removes it.
+    public static string ApplyCustomFlags(string json)
+    {
+        var serializer = new JavaScriptSerializer();
+        var custom = string.IsNullOrWhiteSpace(json)
+            ? new Dictionary<string, object>()
+            : serializer.Deserialize<Dictionary<string, object>>(json);
+        if (custom == null) throw new InvalidOperationException("Flags must be a JSON object like { \"FlagName\": value }.");
+
+        string versionFolder = FindLatestVersionFolder();
+        if (versionFolder == null) throw new InvalidOperationException("Roblox is not installed yet. Start Roblox once, then try again.");
+
+        string settingsFolder = Path.Combine(versionFolder, "ClientSettings");
+        Directory.CreateDirectory(settingsFolder);
+        string file = Path.Combine(settingsFolder, "ClientAppSettings.json");
+        string keysFile = Path.Combine(settingsFolder, CustomKeysFile);
+
+        var settings = ReadClientSettings(file, serializer);
+        if (File.Exists(keysFile))
+        {
+            foreach (string key in File.ReadAllLines(keysFile))
+            {
+                if (key.Length > 0 && key != FpsKey && key != GraphicsKey) settings.Remove(key);
+            }
+        }
+        foreach (var pair in custom) settings[pair.Key] = pair.Value;
+
+        File.WriteAllText(file, serializer.Serialize(settings));
+        File.WriteAllLines(keysFile, custom.Keys.ToArray());
+        return file;
+    }
+
+    // Spreads running Roblox windows across the CPU cores. Each window gets its own group of
+    // cores (one core each if there are more windows than cores). Returns how many were set.
+    public static int SpreadAcrossCores()
+    {
+        int cores = Math.Min(Environment.ProcessorCount, 62);
+        var windows = Process.GetProcessesByName("RobloxPlayerBeta")
+            .Where(p => SafeMainWindow(p) != IntPtr.Zero)
+            .OrderBy(p => SafeStart(p))
+            .ToList();
+        if (windows.Count == 0 || cores <= 0) return 0;
+
+        int groupSize = Math.Max(1, cores / windows.Count);
+        int changed = 0;
+        for (int i = 0; i < windows.Count; i++)
+        {
+            long mask = 0;
+            for (int c = 0; c < groupSize; c++)
+            {
+                mask |= 1L << ((i * groupSize + c) % cores);
+            }
+            try
+            {
+                windows[i].ProcessorAffinity = (IntPtr)mask;
+                changed++;
+            }
+            catch (Exception)
+            {
+                // Process exited or we don't have access. Skip it.
+            }
+        }
+        return changed;
+    }
+
+    static IntPtr SafeMainWindow(Process p)
+    {
+        try { return p.MainWindowHandle; } catch (Exception) { return IntPtr.Zero; }
+    }
+
+    static DateTime SafeStart(Process p)
+    {
+        try { return p.StartTime; } catch (Exception) { return DateTime.MaxValue; }
+    }
+
     // Lowers the CPU priority of every running Roblox window so they yield to other work.
     // Returns how many windows were changed.
     public static int LowerRobloxPriority()
@@ -191,19 +268,21 @@ static class RobloxLauncher
         string file = Path.Combine(settingsFolder, "ClientAppSettings.json");
 
         var serializer = new JavaScriptSerializer();
-        var settings = new Dictionary<string, object>();
-        if (File.Exists(file))
-        {
-            string text = File.ReadAllText(file);
-            if (!string.IsNullOrWhiteSpace(text))
-                settings = serializer.Deserialize<Dictionary<string, object>>(text) ?? settings;
-        }
+        var settings = ReadClientSettings(file, serializer);
 
         if (value != null) settings[key] = value;
         else settings.Remove(key);
 
         File.WriteAllText(file, serializer.Serialize(settings));
         return file;
+    }
+
+    static Dictionary<string, object> ReadClientSettings(string file, JavaScriptSerializer serializer)
+    {
+        if (!File.Exists(file)) return new Dictionary<string, object>();
+        string text = File.ReadAllText(file);
+        if (string.IsNullOrWhiteSpace(text)) return new Dictionary<string, object>();
+        return serializer.Deserialize<Dictionary<string, object>>(text) ?? new Dictionary<string, object>();
     }
 
     static string FindLatestVersionFolder()

@@ -97,6 +97,16 @@ pub fn set_graphics(helper: &Path, level: u32) -> Result<(), String> {
     run(helper, &["graphics", &level.to_string()], "").map(|_| ())
 }
 
+/// Writes the user's client flags (a JSON object). Returns an error if the JSON isn't valid.
+pub fn apply_flags(helper: &Path, json: &str) -> Result<(), String> {
+    run(helper, &["flags"], json).map(|_| ())
+}
+
+/// Spreads running Roblox windows across CPU cores. Returns how many were set.
+pub fn spread_across_cores(helper: &Path) -> Result<String, String> {
+    run(helper, &["spread"], "")
+}
+
 /// Lowers the CPU priority of running Roblox windows. Returns how many were changed.
 pub fn lower_priority(helper: &Path) -> Result<String, String> {
     run(helper, &["priority"], "")

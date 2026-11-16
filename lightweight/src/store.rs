@@ -68,6 +68,10 @@ pub fn presets_path() -> PathBuf {
     config_dir().join("presets.txt")
 }
 
+pub fn flags_path() -> PathBuf {
+    config_dir().join("flags.json")
+}
+
 pub fn settings_path() -> PathBuf {
     config_dir().join("settings.txt")
 }
@@ -196,6 +200,15 @@ fn write_file(path: &Path, text: &str) -> io::Result<()> {
         fs::create_dir_all(dir)?;
     }
     fs::write(path, text)
+}
+
+/// Reads a text file. A missing file is an error, so callers can use unwrap_or_default.
+pub fn read_text(path: &Path) -> io::Result<String> {
+    fs::read_to_string(path)
+}
+
+pub fn write_text(path: &Path, text: &str) -> io::Result<()> {
+    write_file(path, text)
 }
 
 pub fn load(path: &Path) -> io::Result<Vec<Account>> {
