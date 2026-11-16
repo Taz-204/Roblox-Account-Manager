@@ -52,6 +52,14 @@ enum Action {
     ApplyLaunchDelay,
     ApplyGraphics,
     ApplyLimits,
+    HomeClick {
+        pid: u32,
+        ctrl: bool,
+    },
+    HomeAdd(u32),
+    ClearHomeSelection,
+    KillClients(Vec<u32>),
+    ApplyTheme,
     LowerPriority,
     ApplyFlags,
     Spread,
@@ -95,6 +103,7 @@ pub struct App {
     launched: Arc<Mutex<HashMap<u32, String>>>,
     ram_text: String,
     cpu_text: String,
+    home_selected: BTreeSet<u32>,
 }
 
 impl App {
@@ -150,6 +159,7 @@ impl App {
             launched: Arc::new(Mutex::new(HashMap::new())),
             ram_text,
             cpu_text,
+            home_selected: BTreeSet::new(),
         };
 
         // Re-apply saved settings on startup.
@@ -470,7 +480,7 @@ impl App {
             .unwrap_or_default()
     }
 
-    fn home_tab(&self, ui: &mut egui::Ui) {
+    fn home_tab(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.heading("Home");
         let procs = self.procs_snapshot();
         let names: HashMap<u32, String> =
@@ -484,6 +494,27 @@ impl App {
             total_cpu,
             total_mem
         ));
+        ui.horizontal(|ui| {
+            let count = self.home_selected.len();
+            if ui
+                .add_enabled(
+                    count > 0,
+                    egui::Button::new(format!("Kill selected ({count})")),
+                )
+                .clicked()
+            {
+                actions.push(Action::KillClients(
+                    self.home_selected.iter().copied().collect(),
+                ));
+            }
+            if ui
+                .add_enabled(count > 0, egui::Button::new("Clear selection"))
+                .clicked()
+            {
+                actions.push(Action::ClearHomeSelection);
+            }
+            ui.label("Drag across rows to select several. Ctrl+click adds or removes one.");
+        });
         ui.separator();
 
         if procs.is_empty() {
@@ -491,25 +522,27 @@ impl App {
             return;
         }
 
-        egui::Grid::new("home_grid")
-            .striped(true)
-            .num_columns(5)
-            .show(ui, |ui| {
-                ui.strong("Account");
-                ui.strong("PID");
-                ui.strong("CPU (all cores)");
-                ui.strong("Memory");
-                ui.strong("Limits");
-                ui.end_row();
-
-                for p in &procs {
-                    let name = names
-                        .get(&p.pid)
-                        .cloned()
-                        .unwrap_or_else(|| "Started outside this app".into());
-                    ui.label(name);
-                    ui.label(p.pid.to_string());
-                    ui.label(format!("{:.1}%", p.cpu_percent));
+        let pointer_down = ui.input(|i| i.pointer.primary_down());
+        let ctrl = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for p in &procs {
+                let name = names
+                    .get(&p.pid)
+                    .cloned()
+                    .unwrap_or_else(|| "Started outside this app".into());
+                let selected = self.home_selected.contains(&p.pid);
+                ui.horizontal(|ui| {
+                    let response = ui.add_sized(
+                        [240.0, 22.0],
+                        egui::SelectableLabel::new(selected, format!("{name}  (PID {})", p.pid)),
+                    );
+                    // Dragging across rows selects each one. Ctrl-click is handled on click.
+                    if response.clicked() {
+                        actions.push(Action::HomeClick { pid: p.pid, ctrl });
+                    } else if pointer_down && !ctrl && response.hovered() && !selected {
+                        actions.push(Action::HomeAdd(p.pid));
+                    }
+                    ui.label(format!("{:.1}% CPU", p.cpu_percent));
                     ui.label(format!("{:.0} MB", p.memory_mb));
                     let mut limits = Vec::new();
                     if p.cpu_limited {
@@ -519,13 +552,33 @@ impl App {
                         limits.push("RAM");
                     }
                     ui.label(if limits.is_empty() {
-                        "none".to_string()
+                        "no limits".to_string()
                     } else {
-                        limits.join(", ")
+                        format!("limited: {}", limits.join(", "))
                     });
-                    ui.end_row();
-                }
-            });
+                    if ui.button("Kill client").clicked() {
+                        actions.push(Action::KillClients(vec![p.pid]));
+                    }
+                });
+            }
+        });
+    }
+
+    fn kill_clients(&mut self, pids: &[u32]) {
+        let mut killed = 0;
+        let mut failed = Vec::new();
+        for &pid in pids {
+            match winapi::kill_process(pid) {
+                Ok(()) => killed += 1,
+                Err(e) => failed.push(format!("PID {pid}: {e}")),
+            }
+            self.home_selected.remove(&pid);
+        }
+        self.status = if failed.is_empty() {
+            format!("Stopped {killed} client(s). Anything unsaved in them is lost.")
+        } else {
+            format!("Stopped {killed}. Could not stop: {}", failed.join("; "))
+        };
     }
 
     fn apply_limits(&mut self) {
@@ -798,7 +851,14 @@ impl App {
         for (i, account) in self.accounts.iter().enumerate() {
             let is_selected = self.selected.contains(&i);
             let stroke = if is_selected {
-                egui::Stroke::new(2.0, egui::Color32::BLACK)
+                egui::Stroke::new(
+                    2.0,
+                    if ui.visuals().dark_mode {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::BLACK
+                    },
+                )
             } else {
                 egui::Stroke::NONE
             };
@@ -946,6 +1006,20 @@ impl App {
 
     fn settings_tab(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.heading("Settings");
+        ui.horizontal(|ui| {
+            ui.label("Theme:");
+            let mut changed = false;
+            changed |= ui
+                .radio_value(&mut self.settings.dark_mode, true, "Dark")
+                .changed();
+            changed |= ui
+                .radio_value(&mut self.settings.dark_mode, false, "Light")
+                .changed();
+            if changed {
+                actions.push(Action::ApplyTheme);
+            }
+        });
+        ui.separator();
         if ui
             .checkbox(
                 &mut self.settings.multi_instance,
@@ -1074,6 +1148,11 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Keep the Home stats updating even when the mouse is still.
         ctx.request_repaint_after(Duration::from_secs(1));
+        ctx.set_visuals(if self.settings.dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
         // Pick up background results.
         let launch_done = self
             .pending_launch
@@ -1137,7 +1216,7 @@ impl eframe::App for App {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
-            Tab::Home => self.home_tab(ui),
+            Tab::Home => self.home_tab(ui, &mut actions),
             Tab::Accounts => self.accounts_tab(ui, &mut actions),
             Tab::Presets => self.presets_tab(ui, &mut actions),
             Tab::Settings => self.settings_tab(ui, &mut actions),
@@ -1178,6 +1257,22 @@ impl eframe::App for App {
                 Action::ApplyLaunchDelay => self.apply_launch_delay(),
                 Action::ApplyGraphics => self.apply_graphics(),
                 Action::ApplyLimits => self.apply_limits(),
+                Action::HomeClick { pid, ctrl } => {
+                    if ctrl {
+                        if !self.home_selected.remove(&pid) {
+                            self.home_selected.insert(pid);
+                        }
+                    } else {
+                        self.home_selected.clear();
+                        self.home_selected.insert(pid);
+                    }
+                }
+                Action::HomeAdd(pid) => {
+                    self.home_selected.insert(pid);
+                }
+                Action::ClearHomeSelection => self.home_selected.clear(),
+                Action::KillClients(pids) => self.kill_clients(&pids),
+                Action::ApplyTheme => self.persist_settings(),
                 Action::LowerPriority => self.lower_priority(),
                 Action::ApplyFlags => self.apply_flags(),
                 Action::Spread => self.spread(),

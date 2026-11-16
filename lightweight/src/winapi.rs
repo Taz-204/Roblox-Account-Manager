@@ -15,6 +15,7 @@ mod imp {
     use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
     use windows::Win32::System::Threading::{
         PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE, PROCESS_VM_READ,
+        TerminateProcess,
     };
 
     /// Lets the working-set maximum be enforced (the value from the Windows headers).
@@ -234,6 +235,18 @@ mod imp {
         Ok(changed)
     }
     /// Number of logical CPU cores.
+    /// Stops a Roblox client immediately. Anything unsaved in that client is lost.
+    pub fn kill_process(pid: u32) -> Result<(), String> {
+        let handle =
+            unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) }.map_err(|e| e.to_string())?;
+        let result = unsafe { TerminateProcess(handle, 1) }.map_err(|e| e.to_string());
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        result
+    }
+
+    /// Number of logical CPU cores.
     pub fn cores() -> usize {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -372,6 +385,10 @@ mod imp {
         1
     }
 
+    pub fn kill_process(_pid: u32) -> Result<(), String> {
+        Err(ONLY_WINDOWS.into())
+    }
+
     pub fn roblox_process_ids() -> Vec<u32> {
         Vec::new()
     }
@@ -400,6 +417,6 @@ pub struct ProcSample {
 
 #[allow(unused_imports)]
 pub use imp::{
-    cores, limit_cpu, limit_ram, resize_windows, roblox_process_ids, sample, set_priority,
-    spread_across_cores,
+    cores, kill_process, limit_cpu, limit_ram, resize_windows, roblox_process_ids, sample,
+    set_priority, spread_across_cores,
 };

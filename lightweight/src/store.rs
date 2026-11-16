@@ -42,6 +42,8 @@ pub struct Settings {
     pub ram_limit_mb: u32,
     /// CPU cap for each Roblox client, as a percent of all cores. 0 means off.
     pub cpu_limit_percent: u32,
+    /// Dark theme when true, light theme when false.
+    pub dark_mode: bool,
 }
 
 impl Default for Settings {
@@ -55,6 +57,7 @@ impl Default for Settings {
             cpu_priority_normal: false,
             ram_limit_mb: 0,
             cpu_limit_percent: 0,
+            dark_mode: true,
         }
     }
 }
@@ -181,6 +184,7 @@ pub fn parse_settings(text: &str) -> Settings {
             "cpu_priority_normal" => settings.cpu_priority_normal = value.trim() == "true",
             "ram_limit_mb" => settings.ram_limit_mb = value.trim().parse().unwrap_or(0),
             "cpu_limit_percent" => settings.cpu_limit_percent = value.trim().parse().unwrap_or(0),
+            "dark_mode" => settings.dark_mode = value.trim() != "false",
             "launch_delay_ms" => {
                 settings.launch_delay_ms = value
                     .trim()
@@ -195,7 +199,7 @@ pub fn parse_settings(text: &str) -> Settings {
 
 pub fn format_settings(settings: &Settings) -> String {
     format!(
-        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\n",
+        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\ndark_mode={}\n",
         settings.multi_instance,
         settings.fps_cap,
         settings.launch_delay_ms,
@@ -203,7 +207,8 @@ pub fn format_settings(settings: &Settings) -> String {
         settings.cpu_share_on_launch,
         settings.cpu_priority_normal,
         settings.ram_limit_mb,
-        settings.cpu_limit_percent
+        settings.cpu_limit_percent,
+        settings.dark_mode
     )
 }
 
@@ -362,6 +367,7 @@ mod tests {
             cpu_priority_normal: true,
             ram_limit_mb: 512,
             cpu_limit_percent: 40,
+            dark_mode: false,
         };
         assert_eq!(parse_settings(&format_settings(&settings)), settings);
     }
