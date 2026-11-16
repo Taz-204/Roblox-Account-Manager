@@ -49,6 +49,7 @@ enum Action {
     LowerPriority,
     ApplyFlags,
     Spread,
+    Resize,
 }
 
 pub struct App {
@@ -73,6 +74,8 @@ pub struct App {
     delay_text: String,
     graphics_text: String,
     flags_text: String,
+    resize_width: String,
+    resize_height: String,
     helper_path: String,
     status: String,
     avatars: HashMap<String, Vec<u8>>,
@@ -115,6 +118,8 @@ impl App {
             fps_text: settings.fps_cap.to_string(),
             delay_text: settings.launch_delay_ms.to_string(),
             graphics_text: settings.graphics_level.to_string(),
+            resize_width: "256".into(),
+            resize_height: "144".into(),
             flags_text: store::read_text(&store::flags_path()).unwrap_or_default(),
             helper_path,
             status,
@@ -435,6 +440,32 @@ impl App {
         }
     }
 
+    fn resize_windows(&mut self) {
+        let (width, height) = match (
+            self.resize_width.trim().parse::<u32>(),
+            self.resize_height.trim().parse::<u32>(),
+        ) {
+            (Ok(w), Ok(h)) => (w, h),
+            _ => {
+                self.status = "Width and height must be whole numbers.".into();
+                return;
+            }
+        };
+        match helper::resize_windows(&PathBuf::from(&self.helper_path), width, height) {
+            Ok(applied) if applied.trim().is_empty() => {
+                self.status = "No running Roblox windows to resize.".into()
+            }
+            Ok(applied) => {
+                let sizes: Vec<&str> = applied.lines().collect();
+                self.status = format!(
+                    "Asked for {width}x{height}. Windows now: {}. Roblox may enforce a minimum size.",
+                    sizes.join(", ")
+                );
+            }
+            Err(e) => self.status = format!("Could not resize windows: {e}"),
+        }
+    }
+
     fn spread(&mut self) {
         match helper::spread_across_cores(&PathBuf::from(&self.helper_path)) {
             Ok(count) => {
@@ -751,6 +782,17 @@ impl App {
         }
 
         ui.separator();
+        ui.label("Window size for running Roblox windows. Smaller windows use less GPU work. Roblox may refuse sizes below its minimum.");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.resize_width).desired_width(60.0));
+            ui.label("x");
+            ui.add(egui::TextEdit::singleline(&mut self.resize_height).desired_width(60.0));
+            if ui.button("Resize running windows").clicked() {
+                actions.push(Action::Resize);
+            }
+        });
+
+        ui.separator();
         ui.label("Spread running Roblox windows across CPU cores so they don't all compete for the same ones.");
         if ui.button("Spread windows across cores").clicked() {
             actions.push(Action::Spread);
@@ -875,6 +917,7 @@ impl eframe::App for App {
                 Action::LowerPriority => self.lower_priority(),
                 Action::ApplyFlags => self.apply_flags(),
                 Action::Spread => self.spread(),
+                Action::Resize => self.resize_windows(),
             }
         }
     }

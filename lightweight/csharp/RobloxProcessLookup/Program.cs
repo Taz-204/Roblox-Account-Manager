@@ -8,6 +8,7 @@
 //   RobloxProcessLookup.exe graphics <1-10>  Set the Roblox graphics quality override (0 removes it).
 //   RobloxProcessLookup.exe flags           Read a JSON object of client flags from stdin and write them to Roblox's settings.
 //   RobloxProcessLookup.exe spread          Give each running Roblox window its own group of CPU cores. Prints the count.
+//   RobloxProcessLookup.exe resize <width> <height>  Resize every Roblox window. Prints the size applied for each.
 //   RobloxProcessLookup.exe priority        Lower the CPU priority of running Roblox windows. Prints the count.
 //   RobloxProcessLookup.exe avatar <userId> <path>  Save the account's headshot as a PNG.
 //   RobloxProcessLookup.exe multi-instance  Hold Roblox's single-instance lock. Runs until ended.
@@ -64,6 +65,15 @@ static class Program
 
                 case "spread":
                     Console.WriteLine(RobloxLauncher.SpreadAcrossCores());
+                    return 0;
+
+                case "resize":
+                    if (args.Length < 3) return Fail("usage: resize <width> <height>");
+                    int width, height;
+                    if (!int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out width) || width < 64 || width > 4000
+                        || !int.TryParse(args[2], NumberStyles.None, CultureInfo.InvariantCulture, out height) || height < 64 || height > 4000)
+                        return Fail("width and height must be whole numbers from 64 to 4000");
+                    foreach (string size in WindowResizer.Resize(width, height)) Console.WriteLine(size);
                     return 0;
 
                 case "priority":

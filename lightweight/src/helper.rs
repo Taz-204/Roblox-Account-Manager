@@ -107,6 +107,15 @@ pub fn spread_across_cores(helper: &Path) -> Result<String, String> {
     run(helper, &["spread"], "")
 }
 
+/// Resizes every Roblox window. Returns the size Windows applied to each, one per line.
+pub fn resize_windows(helper: &Path, width: u32, height: u32) -> Result<String, String> {
+    run(
+        helper,
+        &["resize", &width.to_string(), &height.to_string()],
+        "",
+    )
+}
+
 /// Lowers the CPU priority of running Roblox windows. Returns how many were changed.
 pub fn lower_priority(helper: &Path) -> Result<String, String> {
     run(helper, &["priority"], "")
