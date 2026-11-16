@@ -93,6 +93,9 @@ static class Program
                 case "multi-instance":
                     return HoldRobloxSingleton();
 
+                case "serve":
+                    return Serve();
+
                 case "launch":
                     if (args.Length < 2) return Fail("usage: launch <placeId> [jobId]");
                     long placeId;
@@ -129,6 +132,38 @@ static class Program
             Console.Out.Flush();
             Thread.Sleep(Timeout.Infinite);
             GC.KeepAlive(singleton);
+        }
+        return 0;
+    }
+
+    // Keeps running and launches clients on request, one per line on stdin:
+    //   placeId<TAB>jobId<TAB>encryptedCookie
+    // Each reply is one line: {"ok":true,"pid":N} or {"ok":false,"error":"..."}.
+    // Staying alive means .NET starts once, and HTTPS connections to Roblox are reused.
+    static int Serve()
+    {
+        string line;
+        while ((line = Console.In.ReadLine()) != null)
+        {
+            string reply;
+            try
+            {
+                string[] parts = line.Split('\t');
+                if (parts.Length < 3) throw new InvalidOperationException("bad launch request");
+                long placeId;
+                if (!long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out placeId))
+                    throw new InvalidOperationException("place id must be a number");
+                string jobId = parts[1].Length > 0 ? parts[1] : null;
+                int pid = RobloxLauncher.Launch(RobloxLauncher.Unprotect(parts[2]), placeId, jobId);
+                reply = "{\"ok\":true,\"pid\":" + pid + "}";
+            }
+            catch (Exception e)
+            {
+                string message = e.Message.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", " ").Replace("\n", " ");
+                reply = "{\"ok\":false,\"error\":\"" + message + "\"}";
+            }
+            Console.Out.Write(reply + "\n");
+            Console.Out.Flush();
         }
         return 0;
     }

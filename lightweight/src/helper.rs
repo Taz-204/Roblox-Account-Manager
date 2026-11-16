@@ -1,8 +1,9 @@
 //! Calls the C# helper (RobloxProcessLookup.exe). Cookies travel on stdin, never on the command line.
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Mutex;
 
 /// The helper is expected next to this program.
 pub fn default_helper_path() -> PathBuf {
@@ -139,6 +140,107 @@ pub fn launch(helper: &Path, blob: &str, place_id: u64, job_id: &str) -> Result<
     Ok(pid)
 }
 
+/// Reads the helper's reply: {"ok":true,"pid":N} or {"ok":false,"error":"..."}.
+fn parse_launch_reply(reply: &str) -> Result<u32, String> {
+    if reply.contains("\"ok\":false") {
+        let rest = reply
+            .split("\"error\":\"")
+            .nth(1)
+            .unwrap_or("launch failed");
+        let end = rest.rfind("\"}").unwrap_or(rest.len());
+        return Err(rest[..end].replace("\\\"", "\"").replace("\\\\", "\\"));
+    }
+    // The helper answers with {"ok":true,"pid":N}. 0 means the pid is unknown.
+    let pid = reply
+        .split("\"pid\":")
+        .nth(1)
+        .unwrap_or("")
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .unwrap_or(0);
+    Ok(pid)
+}
+
+/// A running `RobloxProcessLookup.exe serve`. It is kept between launches so .NET starts only once.
+struct Server {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+static SERVER: Mutex<Option<Server>> = Mutex::new(None);
+
+fn start_server(helper: &Path) -> Result<Server, String> {
+    let mut child = Command::new(helper)
+        .arg("serve")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not start {}: {e}", helper.display()))?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or("could not open the helper's input")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("could not open the helper's output")?;
+    Ok(Server {
+        child,
+        stdin,
+        stdout: BufReader::new(stdout),
+    })
+}
+
+impl Server {
+    fn request(&mut self, line: &str) -> Result<String, String> {
+        self.stdin
+            .write_all(line.as_bytes())
+            .and_then(|_| self.stdin.flush())
+            .map_err(|e| format!("launcher stopped: {e}"))?;
+        let mut reply = String::new();
+        let read = self
+            .stdout
+            .read_line(&mut reply)
+            .map_err(|e| format!("launcher stopped: {e}"))?;
+        if read == 0 {
+            return Err("launcher stopped".into());
+        }
+        Ok(reply)
+    }
+}
+
+/// Same as `launch`, but reuses one helper process across launches, so .NET starts only once.
+/// The app uses this; the command line uses `launch`.
+pub fn launch_fast(helper: &Path, blob: &str, place_id: u64, job_id: &str) -> Result<u32, String> {
+    let line = format!("{place_id}\t{}\t{blob}\n", job_id.trim());
+    let mut slot = SERVER.lock().unwrap_or_else(|e| e.into_inner());
+    for attempt in 0..2 {
+        if slot.is_none() {
+            *slot = Some(start_server(helper)?);
+        }
+        let server = slot.as_mut().expect("the launcher was just started");
+        match server.request(&line) {
+            Ok(reply) => return parse_launch_reply(&reply),
+            Err(e) => {
+                // The helper went away. Start a fresh one and try once more.
+                if let Some(mut dead) = slot.take() {
+                    let _ = dead.child.kill();
+                    let _ = dead.child.wait();
+                }
+                if attempt == 1 {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err("could not reach the launcher".into())
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -173,6 +275,17 @@ mod tests {
         let helper = fake_helper("launch");
         assert!(launch(&helper, "BLOB", 42, "").is_ok());
         assert!(launch(&helper, "BLOB", 42, "job-123").is_ok());
+    }
+
+    #[test]
+    fn parses_launch_replies() {
+        assert_eq!(
+            parse_launch_reply("{\"ok\":true,\"pid\":4321}\n").unwrap(),
+            4321
+        );
+        assert_eq!(parse_launch_reply("{\"ok\":true}\n").unwrap(), 0);
+        let err = parse_launch_reply("{\"ok\":false,\"error\":\"bad \\\"x\\\"\"}\n");
+        assert_eq!(err.unwrap_err(), "bad \"x\"");
     }
 
     #[test]

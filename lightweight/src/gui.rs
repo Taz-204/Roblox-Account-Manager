@@ -696,7 +696,7 @@ impl App {
                 if i > 0 && !delay.is_zero() {
                     thread::sleep(delay);
                 }
-                match helper::launch(&helper_path, &blob, place_id, &job_id) {
+                match helper::launch_fast(&helper_path, &blob, place_id, &job_id) {
                     Ok(pid) => {
                         launched += 1;
                         if pid > 0 {
