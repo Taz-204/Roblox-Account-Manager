@@ -7,7 +7,9 @@ license = "GPL-3.0-only"
 
 [dependencies]
 eframe = { version = "0.29", optional = true }
+egui_extras = { version = "0.29", optional = true, features = ["image"] }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
 
 [features]
 default = []
-gui = ["dep:eframe"]
+gui = ["dep:eframe", "dep:egui_extras", "dep:image"]

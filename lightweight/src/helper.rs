@@ -46,25 +46,45 @@ fn run(helper: &Path, args: &[&str], input_line: &str) -> Result<String, String>
     }
 }
 
-/// The helper prints the encrypted blob on line 1 and the username on line 2 (may be empty).
-fn blob_and_username(output: &str) -> Result<(String, String), String> {
-    let mut lines = output.lines();
-    let blob = lines.next().unwrap_or("").trim().to_string();
+/// What the helper returns for a cookie: the encrypted blob, plus the account's name and user ID.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccountInfo {
+    pub blob: String,
+    pub username: String,
+    pub user_id: String,
+}
+
+/// The helper prints the blob, username, and user ID on separate lines (the last two may be empty).
+fn parse_account_info(output: &str) -> Result<AccountInfo, String> {
+    let mut lines = output.lines().map(|l| l.trim().to_string());
+    let blob = lines.next().unwrap_or_default();
     if blob.is_empty() {
         return Err("helper returned no cookie data".into());
     }
-    let username = lines.next().unwrap_or("").trim().to_string();
-    Ok((blob, username))
+    Ok(AccountInfo {
+        blob,
+        username: lines.next().unwrap_or_default(),
+        user_id: lines.next().unwrap_or_default(),
+    })
 }
 
-/// Encrypts a pasted cookie. Returns (blob, username).
-pub fn protect(helper: &Path, cookie: &str) -> Result<(String, String), String> {
-    blob_and_username(&run(helper, &["protect"], cookie.trim())?)
+/// Encrypts a pasted cookie and looks up the account.
+pub fn protect(helper: &Path, cookie: &str) -> Result<AccountInfo, String> {
+    parse_account_info(&run(helper, &["protect"], cookie.trim())?)
 }
 
-/// Opens a Roblox login window. Returns (blob, username) once the user has signed in.
-pub fn login(helper: &Path) -> Result<(String, String), String> {
-    blob_and_username(&run(helper, &["login"], "")?)
+/// Opens a Roblox login window and returns the account once the user has signed in.
+pub fn login(helper: &Path) -> Result<AccountInfo, String> {
+    parse_account_info(&run(helper, &["login"], "")?)
+}
+
+/// Saves the account's headshot to `destination` (a PNG file).
+pub fn avatar(helper: &Path, user_id: &str, destination: &Path) -> Result<(), String> {
+    if let Some(dir) = destination.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let dest = destination.to_string_lossy().into_owned();
+    run(helper, &["avatar", user_id, &dest], "").map(|_| ())
 }
 
 /// Sets the Roblox FPS cap. 0 removes it.
@@ -119,10 +139,10 @@ mod tests {
     #[test]
     fn protect_returns_blob_and_username() {
         let helper = fake_helper("protect");
-        assert_eq!(
-            protect(&helper, "COOKIE").unwrap(),
-            ("BLOB:COOKIE".to_string(), "alt_name".to_string())
-        );
+        let info = protect(&helper, "COOKIE").unwrap();
+        assert_eq!(info.blob, "BLOB:COOKIE");
+        assert_eq!(info.username, "alt_name");
+        assert_eq!(info.user_id, "");
     }
 
     #[test]

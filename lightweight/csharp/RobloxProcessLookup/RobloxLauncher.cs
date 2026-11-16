@@ -1,8 +1,8 @@
-// Account cookie protection, username lookup, FPS cap, and game launching.
+// Account cookie protection, account lookup, avatars, FPS cap, and game launching.
 // The launch flow matches the original Account.cs in the C# app:
 //   1. POST auth.roblox.com/v1/authentication-ticket/ -> 403 with an X-CSRF-TOKEN header
 //   2. POST again with that token -> rbx-authentication-ticket header
-//   3. Open a roblox-player: link that carries the ticket and the place launcher URL.
+//   3. Start RobloxPlayerBeta.exe with the ticket (or open the roblox-player: link as a fallback).
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -18,6 +18,7 @@ static class RobloxLauncher
 {
     const string AuthBase = "https://auth.roblox.com/";
     const string UsersBase = "https://users.roblox.com/";
+    const string ThumbnailsBase = "https://thumbnails.roblox.com/";
     const string Referer = "https://www.roblox.com/games/4924922222/Brookhaven-RP";
     const string FpsKey = "DFIntTaskSchedulerTargetFps";
 
@@ -41,24 +42,63 @@ static class RobloxLauncher
         return Encoding.UTF8.GetString(data);
     }
 
-    // Returns the encrypted cookie and the account's username ("" if Roblox didn't say).
-    public static string[] ProtectWithUsername(string cookie)
+    // Returns { encrypted cookie, username, user id }. Name and id are "" if Roblox didn't say.
+    public static string[] ProtectWithAccount(string cookie)
     {
         string blob = Protect(cookie);
-        string username = GetUsername(cookie) ?? "";
-        return new[] { blob, username };
+        string name = "";
+        string id = "";
+
+        Dictionary<string, object> user = GetAuthenticatedUser(cookie);
+        if (user != null)
+        {
+            object value;
+            if (user.TryGetValue("name", out value) && value != null) name = value.ToString();
+            if (user.TryGetValue("id", out value) && value != null) id = value.ToString();
+        }
+        return new[] { blob, name, id };
     }
 
-    public static string GetUsername(string cookie)
+    static Dictionary<string, object> GetAuthenticatedUser(string cookie)
     {
         HttpWebResponse response = Send("GET", UsersBase + "v1/users/authenticated", cookie, null);
-        if ((int)response.StatusCode != 200) return null;
+        if (response.StatusCode != HttpStatusCode.OK) return null;
 
         using (var reader = new StreamReader(response.GetResponseStream()))
         {
-            var data = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
-            object name;
-            return data != null && data.TryGetValue("name", out name) ? name as string : null;
+            return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
+        }
+    }
+
+    // Downloads the account's headshot to destination (a PNG file). Thumbnails are public, so no cookie is sent.
+    public static void DownloadAvatar(long userId, string destination)
+    {
+        string url = ThumbnailsBase + "v1/users/avatar-headshot?userIds=" + userId + "&size=150x150&format=Png&isCircular=false";
+        HttpWebResponse listing = Send("GET", url, null, null);
+        if (listing.StatusCode != HttpStatusCode.OK)
+            throw new InvalidOperationException("Roblox returned HTTP " + (int)listing.StatusCode + " for the avatar.");
+
+        string imageUrl = null;
+        using (var reader = new StreamReader(listing.GetResponseStream()))
+        {
+            var root = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
+            var entries = root != null && root.ContainsKey("data") ? root["data"] as object[] : null;
+            var first = entries != null && entries.Length > 0 ? entries[0] as Dictionary<string, object> : null;
+            if (first != null && first.ContainsKey("imageUrl")) imageUrl = first["imageUrl"] as string;
+        }
+
+        if (string.IsNullOrEmpty(imageUrl))
+            throw new InvalidOperationException("Roblox has no avatar image yet. Try again in a moment.");
+
+        HttpWebResponse image = Send("GET", imageUrl, null, null);
+        if (image.StatusCode != HttpStatusCode.OK)
+            throw new InvalidOperationException("Could not download the avatar image (HTTP " + (int)image.StatusCode + ").");
+
+        Directory.CreateDirectory(Path.GetDirectoryName(destination));
+        using (Stream source = image.GetResponseStream())
+        using (FileStream target = File.Create(destination))
+        {
+            source.CopyTo(target);
         }
     }
 
@@ -170,6 +210,7 @@ static class RobloxLauncher
     }
 
     // Roblox answers the first request with 403 on purpose, so error statuses are read, not thrown.
+    // The cookie and csrf headers are optional (null leaves them out).
     static HttpWebResponse Send(string method, string url, string cookie, string csrf)
     {
         var request = (HttpWebRequest)WebRequest.Create(url);
@@ -177,7 +218,7 @@ static class RobloxLauncher
         request.Referer = Referer;
         request.AllowAutoRedirect = false;
         request.UserAgent = "RBX-Alt-Manager-Lite";
-        request.Headers.Add(HttpRequestHeader.Cookie, ".ROBLOSECURITY=" + cookie);
+        if (cookie != null) request.Headers.Add(HttpRequestHeader.Cookie, ".ROBLOSECURITY=" + cookie);
         if (csrf != null) request.Headers["X-CSRF-TOKEN"] = csrf;
 
         if (method == "POST")

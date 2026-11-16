@@ -1,14 +1,16 @@
 //! egui window with Accounts, Presets, and Settings tabs.
-//! Built only with `--features gui`. Launching, logging in, and the multi-instance
-//! lock run in the background so the window keeps responding.
+//! Built only with `--features gui`. Launching, logging in, avatars, and the
+//! multi-instance lock run in the background so the window keeps responding.
 
-use crate::helper;
+use crate::helper::{self, AccountInfo};
 use crate::store::{self, Account, Preset, Settings};
 use eframe::egui;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Child;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -21,15 +23,20 @@ enum Tab {
 struct PendingLogin {
     name: String,
     note: String,
-    result: Receiver<Result<(String, String), String>>,
+    result: Receiver<Result<AccountInfo, String>>,
 }
 
 /// Things the window asks for during a frame. They're applied after the panels are drawn.
 enum Action {
     SetTab(Tab),
+    Select {
+        index: usize,
+        shift: bool,
+        multi: bool,
+    },
     AddAccount,
     Login,
-    RemoveAccount,
+    RemoveSelected,
     Launch,
     NoteChanged,
     AddPreset,
@@ -37,6 +44,7 @@ enum Action {
     UsePreset(usize),
     ToggleMultiInstance,
     ApplyFps,
+    ApplyLaunchDelay,
 }
 
 pub struct App {
@@ -47,7 +55,9 @@ pub struct App {
     presets: Vec<Preset>,
     settings: Settings,
     tab: Tab,
-    selected: Option<usize>,
+    /// Indexes of the selected accounts, and the last one clicked (for Shift-click ranges).
+    selected: BTreeSet<usize>,
+    anchor: Option<usize>,
     new_name: String,
     new_note: String,
     new_cookie: String,
@@ -56,8 +66,11 @@ pub struct App {
     preset_name: String,
     preset_place: String,
     fps_text: String,
+    delay_text: String,
     helper_path: String,
     status: String,
+    avatars: HashMap<String, Vec<u8>>,
+    avatar_started: HashSet<String>,
     multi_child: Option<Child>,
     pending_launch: Option<Receiver<String>>,
     pending_login: Option<PendingLogin>,
@@ -74,6 +87,7 @@ impl App {
         let presets = store::load_presets(&presets_path).unwrap_or_default();
         let settings_path = store::settings_path();
         let settings = store::load_settings(&settings_path).unwrap_or_default();
+        let helper_path = helper::default_helper_path().to_string_lossy().into_owned();
 
         let mut app = Self {
             path,
@@ -83,7 +97,8 @@ impl App {
             presets,
             settings: settings.clone(),
             tab: Tab::Accounts,
-            selected: None,
+            selected: BTreeSet::new(),
+            anchor: None,
             new_name: String::new(),
             new_note: String::new(),
             new_cookie: String::new(),
@@ -92,8 +107,11 @@ impl App {
             preset_name: String::new(),
             preset_place: String::new(),
             fps_text: settings.fps_cap.to_string(),
-            helper_path: helper::default_helper_path().to_string_lossy().into_owned(),
+            delay_text: settings.launch_delay_ms.to_string(),
+            helper_path,
             status,
+            avatars: HashMap::new(),
+            avatar_started: HashSet::new(),
             multi_child: None,
             pending_launch: None,
             pending_login: None,
@@ -104,10 +122,8 @@ impl App {
             app.start_multi_instance();
         }
         if settings.fps_cap > 0 {
-            let path = PathBuf::from(&app.helper_path);
-            match helper::set_fps(&path, settings.fps_cap) {
-                Ok(()) => {}
-                Err(e) => app.status = format!("Could not apply saved FPS cap: {e}"),
+            if let Err(e) = helper::set_fps(&PathBuf::from(&app.helper_path), settings.fps_cap) {
+                app.status = format!("Could not apply saved FPS cap: {e}");
             }
         }
         app
@@ -138,8 +154,42 @@ impl App {
             .any(|a| a.name.eq_ignore_ascii_case(name))
     }
 
+    fn select_only(&mut self, index: usize) {
+        self.selected = BTreeSet::from([index]);
+        self.anchor = Some(index);
+    }
+
+    fn select(&mut self, index: usize, shift: bool, multi: bool) {
+        if shift {
+            let anchor = self.anchor.unwrap_or(index);
+            self.selected = (anchor.min(index)..=anchor.max(index)).collect();
+            self.anchor = Some(anchor);
+        } else if multi {
+            if !self.selected.remove(&index) {
+                self.selected.insert(index);
+            }
+            self.anchor = Some(index);
+        } else {
+            self.select_only(index);
+        }
+    }
+
+    /// The account the details panel and note editor show.
+    fn primary(&self) -> Option<usize> {
+        self.anchor
+            .filter(|a| self.selected.contains(a))
+            .or_else(|| self.selected.iter().next().copied())
+    }
+
     /// Saves a new account. A blank name uses the username Roblox reports for the cookie.
-    fn save_new_account(&mut self, typed_name: &str, note: String, blob: String, username: String) {
+    fn save_new_account(
+        &mut self,
+        typed_name: &str,
+        note: String,
+        cookie_blob: String,
+        username: String,
+        user_id: String,
+    ) -> bool {
         let name = if typed_name.is_empty() {
             store::clean_field(&username)
         } else {
@@ -148,20 +198,23 @@ impl App {
         if name.is_empty() {
             self.status =
                 "Could not find a username for this cookie. Type a name and try again.".into();
-            return;
+            return false;
         }
         if !self.name_is_free(&name) {
             self.status = format!("'{name}' already exists.");
-            return;
+            return false;
         }
         self.accounts.push(Account {
             name: name.clone(),
             note,
-            cookie_blob: blob,
+            cookie_blob,
+            user_id,
         });
-        self.selected = Some(self.accounts.len() - 1);
+        let index = self.accounts.len() - 1;
+        self.select_only(index);
         self.persist_accounts();
         self.status = format!("Added {name}.");
+        true
     }
 
     fn add_account(&mut self) {
@@ -170,30 +223,22 @@ impl App {
 
         // Encrypt the pasted cookie before anything is stored. The field is cleared either way.
         let cookie = std::mem::take(&mut self.new_cookie);
-        if cookie.trim().is_empty() {
-            if typed.is_empty() {
-                self.status = "Enter a name, or paste a cookie to use its username.".into();
-                return;
-            }
-            if !self.name_is_free(&typed) {
-                self.status = format!("'{typed}' already exists.");
-                return;
-            }
-            self.save_new_account(&typed, note, String::new(), String::new());
-            self.new_name.clear();
-            self.new_note.clear();
-            return;
-        }
-
-        match helper::protect(&PathBuf::from(&self.helper_path), &cookie) {
-            Ok((blob, username)) => {
-                self.save_new_account(&typed, note, blob, username);
-                if self.status.starts_with("Added") {
-                    self.new_name.clear();
-                    self.new_note.clear();
+        let saved = if cookie.trim().is_empty() {
+            self.save_new_account(&typed, note, String::new(), String::new(), String::new())
+        } else {
+            match helper::protect(&PathBuf::from(&self.helper_path), &cookie) {
+                Ok(info) => {
+                    self.save_new_account(&typed, note, info.blob, info.username, info.user_id)
+                }
+                Err(e) => {
+                    self.status = format!("Could not save cookie: {e}");
+                    false
                 }
             }
-            Err(e) => self.status = format!("Could not save cookie: {e}"),
+        };
+        if saved {
+            self.new_name.clear();
+            self.new_note.clear();
         }
     }
 
@@ -216,14 +261,20 @@ impl App {
         self.status = "Log in to Roblox in the window that opened...".into();
     }
 
-    fn finish_browser_login(&mut self, result: Result<(String, String), String>) {
+    fn finish_browser_login(&mut self, result: Result<AccountInfo, String>) {
         let Some(login) = self.pending_login.take() else {
             return;
         };
         match result {
-            Ok((blob, username)) => {
-                self.save_new_account(&login.name, login.note, blob, username);
-                if self.status.starts_with("Added") {
+            Ok(info) => {
+                let saved = self.save_new_account(
+                    &login.name,
+                    login.note,
+                    info.blob,
+                    info.username,
+                    info.user_id,
+                );
+                if saved {
                     self.new_name.clear();
                     self.new_note.clear();
                 }
@@ -233,12 +284,19 @@ impl App {
     }
 
     fn remove_selected(&mut self) {
-        if let Some(i) = self.selected.take() {
+        // Remove from the end so earlier indexes stay valid.
+        let indexes: Vec<usize> = self.selected.iter().rev().copied().collect();
+        let mut removed = Vec::new();
+        for i in indexes {
             if i < self.accounts.len() {
-                let removed = self.accounts.remove(i);
-                self.persist_accounts();
-                self.status = format!("Removed {}.", removed.name);
+                removed.push(self.accounts.remove(i).name);
             }
+        }
+        self.selected.clear();
+        self.anchor = None;
+        if !removed.is_empty() {
+            self.persist_accounts();
+            self.status = format!("Removed {}.", removed.join(", "));
         }
     }
 
@@ -312,22 +370,36 @@ impl App {
         }
     }
 
+    fn apply_launch_delay(&mut self) {
+        match self.delay_text.trim().parse::<u64>() {
+            Ok(ms) => {
+                self.settings.launch_delay_ms = ms;
+                self.persist_settings();
+                self.status = format!("Launch delay set to {ms} ms.");
+            }
+            Err(_) => self.status = "Launch delay must be a whole number of milliseconds.".into(),
+        }
+    }
+
+    /// Starts the selected accounts one after another, waiting the launch delay between each.
     fn launch_selected(&mut self) {
         if self.pending_launch.is_some() {
-            self.status = "Still launching the previous game. Please wait.".into();
+            self.status = "Still launching the previous games. Please wait.".into();
             return;
         }
-        let Some(account) = self.selected.and_then(|i| self.accounts.get(i)) else {
-            self.status = "Select an account first.".into();
-            return;
-        };
-        if account.cookie_blob.is_empty() {
-            self.status = format!(
-                "{} has no saved cookie. Log in again or add a cookie.",
-                account.name
-            );
+        let targets: Vec<(String, String)> = self
+            .selected
+            .iter()
+            .filter_map(|&i| self.accounts.get(i))
+            .filter(|a| !a.cookie_blob.is_empty())
+            .map(|a| (a.name.clone(), a.cookie_blob.clone()))
+            .collect();
+        if targets.is_empty() {
+            self.status = "Select an account that has a saved cookie first.".into();
             return;
         }
+        let skipped = self.selected.len() - targets.len();
+
         let place_id = match self.place_id.trim().parse::<u64>() {
             Ok(id) => id,
             Err(_) => {
@@ -335,55 +407,146 @@ impl App {
                 return;
             }
         };
+        let job_id = self.job_id.trim().to_string();
+        let delay = Duration::from_millis(self.settings.launch_delay_ms);
+        let helper_path = PathBuf::from(&self.helper_path);
+        let count = targets.len();
 
         let (tx, rx) = mpsc::channel();
-        let helper_path = PathBuf::from(&self.helper_path);
-        let blob = account.cookie_blob.clone();
-        let name = account.name.clone();
-        let job_id = self.job_id.trim().to_string();
-        let target = if job_id.is_empty() {
-            "any server"
-        } else {
-            "that job"
-        };
-        self.status = format!("Launching {name} into {target}...");
-
-        let thread_name = name.clone();
         thread::spawn(move || {
-            let message = match helper::launch(&helper_path, &blob, place_id, &job_id) {
-                Ok(()) => format!("Launched {thread_name} in place {place_id}."),
-                Err(e) => format!("Launch failed for {thread_name}: {e}"),
-            };
+            let mut launched = 0;
+            let mut failed = Vec::new();
+            for (i, (name, blob)) in targets.into_iter().enumerate() {
+                if i > 0 && !delay.is_zero() {
+                    thread::sleep(delay);
+                }
+                match helper::launch(&helper_path, &blob, place_id, &job_id) {
+                    Ok(()) => launched += 1,
+                    Err(e) => failed.push(format!("{name}: {e}")),
+                }
+            }
+            let mut message = format!("Launched {launched} of {count} in place {place_id}.");
+            if skipped > 0 {
+                message.push_str(&format!(" {skipped} without a cookie were skipped."));
+            }
+            if !failed.is_empty() {
+                message.push_str(&format!(" Failed: {}", failed.join("; ")));
+            }
             let _ = tx.send(message);
         });
 
         self.pending_launch = Some(rx);
+        self.status = format!("Launching {count} account(s) in place {place_id}...");
+    }
+
+    /// Loads saved headshots and downloads any that are missing. Returns true while some are still missing.
+    fn refresh_avatars(&mut self) -> bool {
+        let mut to_fetch: Vec<(String, PathBuf)> = Vec::new();
+        let mut missing = false;
+
+        for account in &self.accounts {
+            let uid = &account.user_id;
+            if uid.is_empty() || self.avatars.contains_key(uid) {
+                continue;
+            }
+            let Some(path) = store::avatar_path(uid) else {
+                continue;
+            };
+            if let Ok(bytes) = std::fs::read(&path) {
+                self.avatars.insert(uid.clone(), bytes);
+                continue;
+            }
+            missing = true;
+            if !self.avatar_started.contains(uid) {
+                to_fetch.push((uid.clone(), path));
+            }
+        }
+
+        for (uid, path) in to_fetch {
+            self.avatar_started.insert(uid.clone());
+            let helper_path = PathBuf::from(&self.helper_path);
+            thread::spawn(move || {
+                let _ = helper::avatar(&helper_path, &uid, &path);
+            });
+        }
+        missing
+    }
+
+    fn accounts_list(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        for (i, account) in self.accounts.iter().enumerate() {
+            let is_selected = self.selected.contains(&i);
+            let stroke = if is_selected {
+                egui::Stroke::new(2.0, egui::Color32::BLACK)
+            } else {
+                egui::Stroke::NONE
+            };
+
+            egui::Frame::none()
+                .stroke(stroke)
+                .rounding(egui::Rounding::same(6.0))
+                .inner_margin(egui::Margin::same(4.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let size = egui::vec2(32.0, 32.0);
+                        match self.avatars.get(&account.user_id) {
+                            Some(bytes) => {
+                                let uri = format!("bytes://avatar/{}", account.user_id);
+                                ui.add(
+                                    egui::Image::from_bytes(uri, bytes.clone())
+                                        .fit_to_exact_size(size),
+                                );
+                            }
+                            None => {
+                                let _ = ui.allocate_space(size);
+                            }
+                        }
+
+                        let label = if account.note.is_empty() {
+                            account.name.clone()
+                        } else {
+                            format!("{}  -  {}", account.name, account.note)
+                        };
+                        let response = ui.selectable_label(is_selected, label);
+                        if response.clicked() {
+                            let modifiers = ui.input(|input| input.modifiers);
+                            actions.push(Action::Select {
+                                index: i,
+                                shift: modifiers.shift,
+                                multi: modifiers.ctrl || modifiers.command,
+                            });
+                        }
+                    });
+                });
+            ui.add_space(2.0);
+        }
     }
 
     fn accounts_tab(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.heading("Selected account");
-        match self.selected.and_then(|i| self.accounts.get_mut(i)) {
-            Some(account) => {
-                ui.label(format!("Name: {}", account.name));
-                let cookie_status = if account.cookie_blob.is_empty() {
-                    "none (launching needs a cookie)"
-                } else {
-                    "saved (encrypted)"
-                };
-                ui.label(format!("Cookie: {cookie_status}"));
-                ui.horizontal(|ui| {
-                    ui.label("Note:");
-                    if ui.text_edit_singleline(&mut account.note).changed() {
-                        actions.push(Action::NoteChanged);
-                    }
-                });
-                if ui.button("Remove account").clicked() {
-                    actions.push(Action::RemoveAccount);
+        if self.selected.len() > 1 {
+            ui.label(format!(
+                "{} accounts selected. Launch starts all of them.",
+                self.selected.len()
+            ));
+        } else if let Some(account) = self.primary().and_then(|i| self.accounts.get_mut(i)) {
+            ui.label(format!("Name: {}", account.name));
+            let cookie_status = if account.cookie_blob.is_empty() {
+                "none (launching needs a cookie)"
+            } else {
+                "saved (encrypted)"
+            };
+            ui.label(format!("Cookie: {cookie_status}"));
+            ui.horizontal(|ui| {
+                ui.label("Note:");
+                if ui.text_edit_singleline(&mut account.note).changed() {
+                    actions.push(Action::NoteChanged);
                 }
-            }
-            None => {
-                ui.label("Select an account on the left, or add one below.");
-            }
+            });
+        } else {
+            ui.label("Click an account on the left. Ctrl-click or Shift-click to select several.");
+        }
+        if !self.selected.is_empty() && ui.button("Remove selected").clicked() {
+            actions.push(Action::RemoveSelected);
         }
 
         ui.separator();
@@ -393,7 +556,12 @@ impl App {
             egui::TextEdit::singleline(&mut self.job_id)
                 .hint_text("Job ID (optional, joins that exact server)"),
         );
-        if ui.button("Launch selected account").clicked() {
+        let label = if self.selected.len() > 1 {
+            format!("Launch {} selected accounts", self.selected.len())
+        } else {
+            "Launch selected account".to_string()
+        };
+        if ui.button(label).clicked() {
             actions.push(Action::Launch);
         }
 
@@ -466,6 +634,15 @@ impl App {
         });
 
         ui.separator();
+        ui.label("Delay between launches when starting several accounts (milliseconds).");
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut self.delay_text).desired_width(80.0));
+            if ui.button("Apply delay").clicked() {
+                actions.push(Action::ApplyLaunchDelay);
+            }
+        });
+
+        ui.separator();
         ui.collapsing("Helper settings", |ui| {
             ui.label("Path to RobloxProcessLookup.exe:");
             ui.text_edit_singleline(&mut self.helper_path);
@@ -497,6 +674,11 @@ impl eframe::App for App {
         if let Some(result) = login_done {
             self.finish_browser_login(result);
         }
+
+        let avatars_missing = self.refresh_avatars();
+        if avatars_missing {
+            ctx.request_repaint_after(Duration::from_secs(1));
+        }
         if self.pending_launch.is_some() || self.pending_login.is_some() {
             ctx.request_repaint();
         }
@@ -523,25 +705,17 @@ impl eframe::App for App {
 
         egui::SidePanel::left("accounts")
             .resizable(true)
-            .default_width(260.0)
+            .default_width(300.0)
             .show(ctx, |ui| {
                 ui.heading("Accounts");
-                ui.label(format!("{} saved", self.accounts.len()));
+                ui.label(format!(
+                    "{} saved, {} selected. Ctrl-click adds or removes, Shift-click selects a range.",
+                    self.accounts.len(),
+                    self.selected.len()
+                ));
                 ui.separator();
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    for (i, account) in self.accounts.iter().enumerate() {
-                        let label = if account.note.is_empty() {
-                            account.name.clone()
-                        } else {
-                            format!("{}  -  {}", account.name, account.note)
-                        };
-                        if ui
-                            .selectable_label(self.selected == Some(i), label)
-                            .clicked()
-                        {
-                            self.selected = Some(i);
-                        }
-                    }
+                    self.accounts_list(ui, &mut actions);
                 });
             });
 
@@ -554,9 +728,14 @@ impl eframe::App for App {
         for action in actions {
             match action {
                 Action::SetTab(tab) => self.tab = tab,
+                Action::Select {
+                    index,
+                    shift,
+                    multi,
+                } => self.select(index, shift, multi),
                 Action::AddAccount => self.add_account(),
                 Action::Login => self.start_browser_login(),
-                Action::RemoveAccount => self.remove_selected(),
+                Action::RemoveSelected => self.remove_selected(),
                 Action::Launch => self.launch_selected(),
                 Action::NoteChanged => self.persist_accounts(),
                 Action::AddPreset => self.add_preset(),
@@ -577,6 +756,7 @@ impl eframe::App for App {
                 }
                 Action::ToggleMultiInstance => self.toggle_multi_instance(),
                 Action::ApplyFps => self.apply_fps(),
+                Action::ApplyLaunchDelay => self.apply_launch_delay(),
             }
         }
     }

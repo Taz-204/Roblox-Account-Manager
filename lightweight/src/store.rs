@@ -15,6 +15,8 @@ pub struct Account {
     pub note: String,
     /// Encrypted cookie from the helper. Empty if none saved.
     pub cookie_blob: String,
+    /// Roblox user ID, used for the avatar. Empty if unknown.
+    pub user_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,11 +25,23 @@ pub struct Preset {
     pub place_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub multi_instance: bool,
     /// 0 means no cap.
     pub fps_cap: u32,
+    /// Pause between launches when several accounts start together.
+    pub launch_delay_ms: u64,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            multi_instance: false,
+            fps_cap: 0,
+            launch_delay_ms: 2000,
+        }
+    }
 }
 
 fn config_dir() -> PathBuf {
@@ -55,6 +69,14 @@ pub fn settings_path() -> PathBuf {
     config_dir().join("settings.txt")
 }
 
+/// Where an account's headshot is saved. None if the user ID isn't a plain number.
+pub fn avatar_path(user_id: &str) -> Option<PathBuf> {
+    if user_id.is_empty() || !user_id.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(config_dir().join("avatars").join(format!("{user_id}.png")))
+}
+
 /// Removes tabs and line breaks so a field can't break the file format.
 pub fn clean_field(text: &str) -> String {
     text.chars()
@@ -70,16 +92,17 @@ pub fn clean_field(text: &str) -> String {
         .to_string()
 }
 
-/// File format: one account per line, `name<TAB>note<TAB>cookie_blob`.
+/// File format: one account per line, `name<TAB>note<TAB>cookie_blob<TAB>user_id`.
 pub fn parse_accounts(text: &str) -> Vec<Account> {
     text.lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| {
-            let mut parts = l.splitn(3, '\t');
+            let mut parts = l.splitn(4, '\t');
             Account {
                 name: parts.next().unwrap_or("").trim().to_string(),
                 note: parts.next().unwrap_or("").trim().to_string(),
                 cookie_blob: parts.next().unwrap_or("").trim().to_string(),
+                user_id: parts.next().unwrap_or("").trim().to_string(),
             }
         })
         .filter(|a| !a.name.is_empty())
@@ -91,10 +114,11 @@ pub fn format_accounts(accounts: &[Account]) -> String {
         .iter()
         .map(|a| {
             format!(
-                "{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\n",
                 clean_field(&a.name),
                 clean_field(&a.note),
-                a.cookie_blob.trim()
+                a.cookie_blob.trim(),
+                clean_field(&a.user_id)
             )
         })
         .collect()
@@ -133,6 +157,12 @@ pub fn parse_settings(text: &str) -> Settings {
         match key.trim() {
             "multi_instance" => settings.multi_instance = value.trim() == "true",
             "fps_cap" => settings.fps_cap = value.trim().parse().unwrap_or(0),
+            "launch_delay_ms" => {
+                settings.launch_delay_ms = value
+                    .trim()
+                    .parse()
+                    .unwrap_or(Settings::default().launch_delay_ms)
+            }
             _ => {}
         }
     }
@@ -141,8 +171,8 @@ pub fn parse_settings(text: &str) -> Settings {
 
 pub fn format_settings(settings: &Settings) -> String {
     format!(
-        "multi_instance={}\nfps_cap={}\n",
-        settings.multi_instance, settings.fps_cap
+        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\n",
+        settings.multi_instance, settings.fps_cap, settings.launch_delay_ms
     )
 }
 
@@ -220,6 +250,7 @@ mod tests {
             name: name.into(),
             note: note.into(),
             cookie_blob: blob.into(),
+            user_id: String::new(),
         }
     }
 
@@ -271,10 +302,21 @@ mod tests {
     }
 
     #[test]
+    fn keeps_user_id_and_rejects_bad_avatar_ids() {
+        let mut acc = account("alt", "", "BLOB");
+        acc.user_id = "12345".into();
+        assert_eq!(parse_accounts(&format_accounts(&[acc.clone()])), vec![acc]);
+        assert!(avatar_path("12345").is_some());
+        assert!(avatar_path("../etc").is_none());
+        assert!(avatar_path("").is_none());
+    }
+
+    #[test]
     fn round_trips_settings() {
         let settings = Settings {
             multi_instance: true,
             fps_cap: 144,
+            launch_delay_ms: 750,
         };
         assert_eq!(parse_settings(&format_settings(&settings)), settings);
     }
@@ -283,5 +325,6 @@ mod tests {
     fn missing_settings_use_defaults() {
         assert_eq!(parse_settings(""), Settings::default());
         assert_eq!(parse_settings("fps_cap=abc\nother=1"), Settings::default());
+        assert_eq!(Settings::default().launch_delay_ms, 2000);
     }
 }

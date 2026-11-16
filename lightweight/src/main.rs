@@ -36,7 +36,8 @@ fn run_gui(path: PathBuf) {
     let result = eframe::run_native(
         "Roblox Alt Manager",
         options,
-        Box::new(move |_cc: &eframe::CreationContext<'_>| -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
+        Box::new(move |cc: &eframe::CreationContext<'_>| -> Result<Box<dyn eframe::App>, Box<dyn std::error::Error + Send + Sync>> {
+            egui_extras::install_image_loaders(&cc.egui_ctx);
             Ok(Box::new(gui::App::new(path.clone())))
         }),
     );
@@ -117,6 +118,7 @@ fn run_command(line: &str, accounts: &mut Vec<Account>, path: &PathBuf) -> Resul
                 name: name.clone(),
                 note,
                 cookie_blob: String::new(),
+                user_id: String::new(),
             });
             save(path, accounts).map_err(|e| e.to_string())?;
             println!("Added {name}");

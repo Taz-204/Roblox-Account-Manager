@@ -3,8 +3,9 @@
 //   RobloxProcessLookup.exe                 Print running Roblox game processes as JSON.
 //   RobloxProcessLookup.exe protect         Read a .ROBLOSECURITY cookie from stdin and print it encrypted (base64).
 //   RobloxProcessLookup.exe launch <placeId> [jobId]  Read an encrypted cookie from stdin and start the game.
-//   RobloxProcessLookup.exe login           Open a Roblox login window. Prints the encrypted cookie, then the username.
+//   RobloxProcessLookup.exe login           Open a Roblox login window. Prints the encrypted cookie, username, and user id.
 //   RobloxProcessLookup.exe fps <n>         Set the Roblox FPS cap (0 removes it).
+//   RobloxProcessLookup.exe avatar <userId> <path>  Save the account's headshot as a PNG.
 //   RobloxProcessLookup.exe multi-instance  Hold Roblox's single-instance lock. Runs until ended.
 //
 // Errors go to stderr with exit code 1. Cookies are never printed.
@@ -28,13 +29,13 @@ static class Program
             switch (args[0])
             {
                 case "protect":
-                    WriteBlobAndUsername(RobloxLauncher.ProtectWithUsername(ReadStdinLine()));
+                    WriteValues(RobloxLauncher.ProtectWithAccount(ReadStdinLine()));
                     return 0;
 
                 case "login":
                     string cookie = BrowserLogin.Run();
                     if (string.IsNullOrEmpty(cookie)) return Fail("login was cancelled");
-                    WriteBlobAndUsername(RobloxLauncher.ProtectWithUsername(cookie));
+                    WriteValues(RobloxLauncher.ProtectWithAccount(cookie));
                     return 0;
 
                 case "fps":
@@ -43,6 +44,14 @@ static class Program
                     if (!int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out fps) || fps < 0)
                         return Fail("fps must be a whole number, 0 or more");
                     Console.WriteLine(RobloxLauncher.SetFps(fps));
+                    return 0;
+
+                case "avatar":
+                    if (args.Length < 3) return Fail("usage: avatar <userId> <path>");
+                    long avatarUserId;
+                    if (!long.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out avatarUserId))
+                        return Fail("user id must be a number");
+                    RobloxLauncher.DownloadAvatar(avatarUserId, args[2]);
                     return 0;
 
                 case "multi-instance":
@@ -68,11 +77,10 @@ static class Program
         }
     }
 
-    // Blob on line 1, username on line 2 (empty if unknown).
-    static void WriteBlobAndUsername(string[] values)
+    // One value per line: encrypted cookie, username, user id (empty if unknown).
+    static void WriteValues(string[] values)
     {
-        Console.WriteLine(values[0]);
-        Console.WriteLine(values[1]);
+        foreach (string value in values) Console.WriteLine(value);
     }
 
     // Holding Roblox's single-instance event stops Roblox from blocking a second client.
