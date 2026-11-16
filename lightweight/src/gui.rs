@@ -39,6 +39,7 @@ enum Action {
     Login,
     RemoveSelected,
     Launch,
+    PerformanceLaunch,
     NoteChanged,
     AddPreset,
     RemovePreset(usize),
@@ -442,6 +443,33 @@ impl App {
         }
     }
 
+    /// Applies the saved FPS, graphics, and flag settings, then launches the selected accounts.
+    /// Nothing is launched if a setting fails to apply.
+    fn performance_launch(&mut self) {
+        let helper_path = PathBuf::from(&self.helper_path);
+        let mut problems = Vec::new();
+        if let Err(e) = helper::set_fps(&helper_path, self.settings.fps_cap) {
+            problems.push(format!("FPS: {e}"));
+        }
+        if let Err(e) = helper::set_graphics(&helper_path, self.settings.graphics_level) {
+            problems.push(format!("graphics: {e}"));
+        }
+        let flags = self.flags_text.trim().to_string();
+        if !flags.is_empty() {
+            if let Err(e) = helper::apply_flags(&helper_path, &flags) {
+                problems.push(format!("flags: {e}"));
+            }
+        }
+        if !problems.is_empty() {
+            self.status = format!(
+                "Not launched. Could not apply settings: {}",
+                problems.join("; ")
+            );
+            return;
+        }
+        self.launch_selected();
+    }
+
     fn resize_windows(&mut self) {
         let (width, height) = match (
             self.resize_width.trim().parse::<u32>(),
@@ -684,6 +712,12 @@ impl App {
         if ui.button(label).clicked() {
             actions.push(Action::Launch);
         }
+        if ui
+            .button("Performance launch (apply FPS, graphics and flags first)")
+            .clicked()
+        {
+            actions.push(Action::PerformanceLaunch);
+        }
 
         ui.separator();
         ui.heading("Add account");
@@ -925,6 +959,7 @@ impl eframe::App for App {
                 Action::Login => self.start_browser_login(),
                 Action::RemoveSelected => self.remove_selected(),
                 Action::Launch => self.launch_selected(),
+                Action::PerformanceLaunch => self.performance_launch(),
                 Action::NoteChanged => self.persist_accounts(),
                 Action::AddPreset => self.add_preset(),
                 Action::RemovePreset(i) => {
