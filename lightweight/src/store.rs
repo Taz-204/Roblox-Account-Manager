@@ -1,4 +1,4 @@
-//! Account storage, shared by the window and the command line.
+//! Storage for accounts, presets, and settings, shared by the window and the command line.
 //!
 //! Standard library only. Cookies are never stored in plain text: each account
 //! keeps only the DPAPI-encrypted blob produced by the C# helper.
@@ -13,11 +13,24 @@ use std::process::Command;
 pub struct Account {
     pub name: String,
     pub note: String,
-    /// Encrypted cookie from the helper's `protect` command. Empty if none saved.
+    /// Encrypted cookie from the helper. Empty if none saved.
     pub cookie_blob: String,
 }
 
-pub fn config_path() -> PathBuf {
+#[derive(Debug, Clone, PartialEq)]
+pub struct Preset {
+    pub name: String,
+    pub place_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Settings {
+    pub multi_instance: bool,
+    /// 0 means no cap.
+    pub fps_cap: u32,
+}
+
+fn config_dir() -> PathBuf {
     let base = if cfg!(windows) {
         env::var("APPDATA")
             .map(PathBuf::from)
@@ -27,7 +40,19 @@ pub fn config_path() -> PathBuf {
             .map(|h| PathBuf::from(h).join(".config"))
             .unwrap_or_else(|_| PathBuf::from("."))
     };
-    base.join("rbx-alt-manager").join("accounts.txt")
+    base.join("rbx-alt-manager")
+}
+
+pub fn config_path() -> PathBuf {
+    config_dir().join("accounts.txt")
+}
+
+pub fn presets_path() -> PathBuf {
+    config_dir().join("presets.txt")
+}
+
+pub fn settings_path() -> PathBuf {
+    config_dir().join("settings.txt")
 }
 
 /// Removes tabs and line breaks so a field can't break the file format.
@@ -75,19 +100,95 @@ pub fn format_accounts(accounts: &[Account]) -> String {
         .collect()
 }
 
-pub fn load(path: &Path) -> io::Result<Vec<Account>> {
+/// File format: one preset per line, `name<TAB>place_id`.
+pub fn parse_presets(text: &str) -> Vec<Preset> {
+    text.lines()
+        .filter_map(|l| {
+            let mut parts = l.splitn(2, '\t');
+            let name = clean_field(parts.next().unwrap_or(""));
+            let place_id = clean_field(parts.next().unwrap_or(""));
+            if name.is_empty() || place_id.is_empty() {
+                None
+            } else {
+                Some(Preset { name, place_id })
+            }
+        })
+        .collect()
+}
+
+pub fn format_presets(presets: &[Preset]) -> String {
+    presets
+        .iter()
+        .map(|p| format!("{}\t{}\n", clean_field(&p.name), clean_field(&p.place_id)))
+        .collect()
+}
+
+/// File format: `key=value` lines. Unknown keys are ignored.
+pub fn parse_settings(text: &str) -> Settings {
+    let mut settings = Settings::default();
+    for line in text.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "multi_instance" => settings.multi_instance = value.trim() == "true",
+            "fps_cap" => settings.fps_cap = value.trim().parse().unwrap_or(0),
+            _ => {}
+        }
+    }
+    settings
+}
+
+pub fn format_settings(settings: &Settings) -> String {
+    format!(
+        "multi_instance={}\nfps_cap={}\n",
+        settings.multi_instance, settings.fps_cap
+    )
+}
+
+fn read_or_default(path: &Path) -> io::Result<Option<String>> {
     match fs::read_to_string(path) {
-        Ok(text) => Ok(parse_accounts(&text)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e),
     }
 }
 
-pub fn save(path: &Path, accounts: &[Account]) -> io::Result<()> {
+fn write_file(path: &Path, text: &str) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    fs::write(path, format_accounts(accounts))
+    fs::write(path, text)
+}
+
+pub fn load(path: &Path) -> io::Result<Vec<Account>> {
+    Ok(read_or_default(path)?
+        .map(|t| parse_accounts(&t))
+        .unwrap_or_default())
+}
+
+pub fn save(path: &Path, accounts: &[Account]) -> io::Result<()> {
+    write_file(path, &format_accounts(accounts))
+}
+
+pub fn load_presets(path: &Path) -> io::Result<Vec<Preset>> {
+    Ok(read_or_default(path)?
+        .map(|t| parse_presets(&t))
+        .unwrap_or_default())
+}
+
+pub fn save_presets(path: &Path, presets: &[Preset]) -> io::Result<()> {
+    write_file(path, &format_presets(presets))
+}
+
+pub fn load_settings(path: &Path) -> io::Result<Settings> {
+    Ok(read_or_default(path)?
+        .map(|t| parse_settings(&t))
+        .unwrap_or_default())
+}
+
+pub fn save_settings(path: &Path, settings: &Settings) -> io::Result<()> {
+    write_file(path, &format_settings(settings))
 }
 
 /// Opens a Roblox experience by place ID using the roblox:// URI scheme.
@@ -128,8 +229,7 @@ mod tests {
             account("alt1", "farming bank", "QmxvYg=="),
             account("alt2", "", ""),
         ];
-        let text = format_accounts(&accounts);
-        assert_eq!(parse_accounts(&text), accounts);
+        assert_eq!(parse_accounts(&format_accounts(&accounts)), accounts);
     }
 
     #[test]
@@ -148,5 +248,40 @@ mod tests {
     #[test]
     fn clean_field_removes_separators() {
         assert_eq!(clean_field("  a\tb\r\nc  "), "a b  c");
+    }
+
+    #[test]
+    fn round_trips_presets() {
+        let presets = vec![
+            Preset {
+                name: "Bloxburg".into(),
+                place_id: "185655149".into(),
+            },
+            Preset {
+                name: "Farm".into(),
+                place_id: "123".into(),
+            },
+        ];
+        assert_eq!(parse_presets(&format_presets(&presets)), presets);
+    }
+
+    #[test]
+    fn drops_presets_without_a_place_id() {
+        assert!(parse_presets("NoPlace\n\tonly-id\n").is_empty());
+    }
+
+    #[test]
+    fn round_trips_settings() {
+        let settings = Settings {
+            multi_instance: true,
+            fps_cap: 144,
+        };
+        assert_eq!(parse_settings(&format_settings(&settings)), settings);
+    }
+
+    #[test]
+    fn missing_settings_use_defaults() {
+        assert_eq!(parse_settings(""), Settings::default());
+        assert_eq!(parse_settings("fps_cap=abc\nother=1"), Settings::default());
     }
 }

@@ -3,7 +3,9 @@
 //   RobloxProcessLookup.exe                 Print running Roblox game processes as JSON.
 //   RobloxProcessLookup.exe protect         Read a .ROBLOSECURITY cookie from stdin and print it encrypted (base64).
 //   RobloxProcessLookup.exe launch <placeId> [jobId]  Read an encrypted cookie from stdin and start the game.
-//   RobloxProcessLookup.exe login           Open a Roblox login window and print the encrypted cookie.
+//   RobloxProcessLookup.exe login           Open a Roblox login window. Prints the encrypted cookie, then the username.
+//   RobloxProcessLookup.exe fps <n>         Set the Roblox FPS cap (0 removes it).
+//   RobloxProcessLookup.exe multi-instance  Hold Roblox's single-instance lock. Runs until ended.
 //
 // Errors go to stderr with exit code 1. Cookies are never printed.
 using System;
@@ -12,6 +14,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Management;
 using System.Text;
+using System.Threading;
 
 static class Program
 {
@@ -25,14 +28,25 @@ static class Program
             switch (args[0])
             {
                 case "protect":
-                    Console.WriteLine(RobloxLauncher.Protect(ReadStdinLine()));
+                    WriteBlobAndUsername(RobloxLauncher.ProtectWithUsername(ReadStdinLine()));
                     return 0;
 
                 case "login":
                     string cookie = BrowserLogin.Run();
                     if (string.IsNullOrEmpty(cookie)) return Fail("login was cancelled");
-                    Console.WriteLine(RobloxLauncher.Protect(cookie));
+                    WriteBlobAndUsername(RobloxLauncher.ProtectWithUsername(cookie));
                     return 0;
+
+                case "fps":
+                    if (args.Length < 2) return Fail("usage: fps <number>, 0 removes the cap");
+                    int fps;
+                    if (!int.TryParse(args[1], NumberStyles.None, CultureInfo.InvariantCulture, out fps) || fps < 0)
+                        return Fail("fps must be a whole number, 0 or more");
+                    Console.WriteLine(RobloxLauncher.SetFps(fps));
+                    return 0;
+
+                case "multi-instance":
+                    return HoldRobloxSingleton();
 
                 case "launch":
                     if (args.Length < 2) return Fail("usage: launch <placeId> [jobId]");
@@ -52,6 +66,27 @@ static class Program
         {
             return Fail(ex.Message);
         }
+    }
+
+    // Blob on line 1, username on line 2 (empty if unknown).
+    static void WriteBlobAndUsername(string[] values)
+    {
+        Console.WriteLine(values[0]);
+        Console.WriteLine(values[1]);
+    }
+
+    // Holding Roblox's single-instance event stops Roblox from blocking a second client.
+    // Runs until the process is ended.
+    static int HoldRobloxSingleton()
+    {
+        using (var singleton = new EventWaitHandle(false, EventResetMode.AutoReset, "ROBLOX_singletonEvent"))
+        {
+            Console.WriteLine("holding");
+            Console.Out.Flush();
+            Thread.Sleep(Timeout.Infinite);
+            GC.KeepAlive(singleton);
+        }
+        return 0;
     }
 
     static string ReadStdinLine()

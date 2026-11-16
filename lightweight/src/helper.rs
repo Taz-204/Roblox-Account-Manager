@@ -1,9 +1,8 @@
-//! Calls the C# helper (RobloxProcessLookup.exe) for cookie encryption and launching.
-//! Cookies travel to the helper on stdin, never on the command line.
+//! Calls the C# helper (RobloxProcessLookup.exe). Cookies travel on stdin, never on the command line.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 /// The helper is expected next to this program.
 pub fn default_helper_path() -> PathBuf {
@@ -47,14 +46,41 @@ fn run(helper: &Path, args: &[&str], input_line: &str) -> Result<String, String>
     }
 }
 
-/// Encrypts a cookie. Returns the blob to store.
-pub fn protect(helper: &Path, cookie: &str) -> Result<String, String> {
-    run(helper, &["protect"], cookie.trim())
+/// The helper prints the encrypted blob on line 1 and the username on line 2 (may be empty).
+fn blob_and_username(output: &str) -> Result<(String, String), String> {
+    let mut lines = output.lines();
+    let blob = lines.next().unwrap_or("").trim().to_string();
+    if blob.is_empty() {
+        return Err("helper returned no cookie data".into());
+    }
+    let username = lines.next().unwrap_or("").trim().to_string();
+    Ok((blob, username))
 }
 
-/// Opens a Roblox login window. Returns the encrypted cookie blob once the user has signed in.
-pub fn login(helper: &Path) -> Result<String, String> {
-    run(helper, &["login"], "")
+/// Encrypts a pasted cookie. Returns (blob, username).
+pub fn protect(helper: &Path, cookie: &str) -> Result<(String, String), String> {
+    blob_and_username(&run(helper, &["protect"], cookie.trim())?)
+}
+
+/// Opens a Roblox login window. Returns (blob, username) once the user has signed in.
+pub fn login(helper: &Path) -> Result<(String, String), String> {
+    blob_and_username(&run(helper, &["login"], "")?)
+}
+
+/// Sets the Roblox FPS cap. 0 removes it.
+pub fn set_fps(helper: &Path, fps: u32) -> Result<(), String> {
+    run(helper, &["fps", &fps.to_string()], "").map(|_| ())
+}
+
+/// Starts the helper that holds Roblox's single-instance lock. The caller keeps the child and kills it to turn this off.
+pub fn start_multi_instance(helper: &Path) -> Result<Child, String> {
+    Command::new(helper)
+        .arg("multi-instance")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("could not start multi-instance lock: {e}"))
 }
 
 /// Starts the game for the account whose cookie blob is given.
@@ -63,9 +89,9 @@ pub fn launch(helper: &Path, blob: &str, place_id: u64, job_id: &str) -> Result<
     let place = place_id.to_string();
     let job = job_id.trim();
     let args: Vec<&str> = if job.is_empty() {
-        vec!["launch", &place]
+        vec!["launch", place.as_str()]
     } else {
-        vec!["launch", &place, job]
+        vec!["launch", place.as_str(), job]
     };
     run(helper, &args, blob).map(|_| ())
 }
@@ -83,7 +109,7 @@ mod tests {
         let path = dir.join("fake-helper.sh");
         std::fs::write(
             &path,
-            "#!/bin/sh\nread line\nif [ \"$1\" = protect ]; then echo \"BLOB:$line\"; else echo \"LAUNCHED:$2:$line\"; fi\n",
+            "#!/bin/sh\nread line\nif [ \"$1\" = protect ]; then printf 'BLOB:%s\\nalt_name\\n' \"$line\"; else echo \"LAUNCHED:$2:$line\"; fi\n",
         )
         .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -91,9 +117,12 @@ mod tests {
     }
 
     #[test]
-    fn protect_sends_cookie_and_returns_blob() {
+    fn protect_returns_blob_and_username() {
         let helper = fake_helper("protect");
-        assert_eq!(protect(&helper, "COOKIE").unwrap(), "BLOB:COOKIE");
+        assert_eq!(
+            protect(&helper, "COOKIE").unwrap(),
+            ("BLOB:COOKIE".to_string(), "alt_name".to_string())
+        );
     }
 
     #[test]
@@ -105,7 +134,6 @@ mod tests {
 
     #[test]
     fn missing_helper_is_an_error_not_a_panic() {
-        let result = protect(Path::new("/nonexistent/helper"), "x");
-        assert!(result.is_err());
+        assert!(protect(Path::new("/nonexistent/helper"), "x").is_err());
     }
 }
