@@ -666,6 +666,16 @@ impl App {
         let cpu_share = self.settings.cpu_share_on_launch;
         let cpu_normal = self.settings.cpu_priority_normal;
 
+        // Roblox runs only one client unless the multi-instance lock is held, so a second client
+        // closes right away. Turn the lock on when several accounts start together.
+        if count > 1 && self.multi_child.is_none() {
+            self.start_multi_instance();
+            if self.multi_child.is_some() {
+                self.settings.multi_instance = true;
+                self.persist_settings();
+            }
+        }
+
         let launched_map = self.launched.clone();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
@@ -691,6 +701,7 @@ impl App {
                 }
             }
             let mut launched = 0;
+            let mut started: Vec<(String, u32)> = Vec::new();
             let mut failed = Vec::new();
             for (i, (name, blob)) in targets.into_iter().enumerate() {
                 if i > 0 && !delay.is_zero() {
@@ -703,6 +714,7 @@ impl App {
                             if let Ok(mut map) = launched_map.lock() {
                                 map.insert(pid, name.clone());
                             }
+                            started.push((name.clone(), pid));
                         }
                     }
                     Err(e) => failed.push(format!("{name}: {e}")),
@@ -717,6 +729,22 @@ impl App {
             }
             if !failed.is_empty() {
                 message.push_str(&format!(" Failed: {}", failed.join("; ")));
+            }
+            if !started.is_empty() {
+                // Give the clients a few seconds to start, then check they are still running.
+                thread::sleep(Duration::from_secs(5));
+                let running = winapi::roblox_process_ids();
+                let closed: Vec<String> = started
+                    .iter()
+                    .filter(|(_, pid)| !running.contains(pid))
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                if !closed.is_empty() {
+                    message.push_str(&format!(
+                        " These closed right after starting: {}. Turn on multi-instance if more than one client is open.",
+                        closed.join(", ")
+                    ));
+                }
             }
             let _ = tx.send(message);
 
