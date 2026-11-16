@@ -8,14 +8,19 @@ mod imp {
     use std::ffi::c_void;
     use std::mem::size_of;
 
+    use super::ProcSample;
     use windows::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOBOBJECTINFOCLASS, SetInformationJobObject,
     };
-    use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS};
+    use windows::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, SetProcessWorkingSetSizeEx,
+    };
     use windows::Win32::System::Threading::{
         PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE, PROCESS_VM_READ,
-        QUOTA_LIMITS_HARDWS_MAX_ENABLE, SetProcessWorkingSetSizeEx,
     };
+
+    /// Lets the working-set maximum be enforced (the value from the Windows headers).
+    const QUOTA_LIMITS_HARDWS_MAX_ENABLE: u32 = 0x8;
     use windows::core::PCWSTR;
 
     use windows::Win32::Foundation::{BOOL, CloseHandle, FILETIME, HANDLE, HWND, LPARAM, RECT};
@@ -250,7 +255,7 @@ mod imp {
         let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
         let cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
         counters.cb = cb;
-        let mem_ok = unsafe { GetProcessMemoryInfo(handle, &mut counters, cb) }.as_bool();
+        let mem_ok = unsafe { GetProcessMemoryInfo(handle, &mut counters, cb) }.is_ok();
 
         unsafe {
             let _ = CloseHandle(handle);
