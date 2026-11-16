@@ -141,7 +141,14 @@ static class RobloxLauncher
         HttpWebResponse response = Send("POST", AuthBase + "v1/authentication-ticket/", cookie, csrf);
         string ticket = response.Headers["rbx-authentication-ticket"];
         if (string.IsNullOrEmpty(ticket))
-            throw new InvalidOperationException("Roblox did not return an authentication ticket (HTTP " + (int)response.StatusCode + ").");
+        {
+            string detail;
+            using (var reader = new StreamReader(response.GetResponseStream()))
+            {
+                detail = reader.ReadToEnd();
+            }
+            throw new InvalidOperationException("Roblox did not return an authentication ticket (HTTP " + (int)response.StatusCode + "). " + detail);
+        }
         return ticket;
     }
 
@@ -154,8 +161,19 @@ static class RobloxLauncher
         request.AllowAutoRedirect = false;
         request.UserAgent = "RBX-Alt-Manager-Lite";
         request.Headers.Add(HttpRequestHeader.Cookie, ".ROBLOSECURITY=" + cookie);
-        if (method == "POST") request.ContentLength = 0;
         if (csrf != null) request.Headers["X-CSRF-TOKEN"] = csrf;
+
+        if (method == "POST")
+        {
+            // Roblox answers 415 (Unsupported Media Type) to POSTs without a JSON body.
+            byte[] body = Encoding.UTF8.GetBytes("{}");
+            request.ContentType = "application/json";
+            request.ContentLength = body.Length;
+            using (Stream stream = request.GetRequestStream())
+            {
+                stream.Write(body, 0, body.Length);
+            }
+        }
 
         try
         {
