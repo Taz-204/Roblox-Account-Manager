@@ -44,15 +44,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: microsoft/setup-msbuild@v2
       - run: msbuild RobloxProcessLookup.csproj /restore /p:Configuration=Release
-      - name: Stage helper exe
+      - name: Stage helper and its DLLs
         run: |
           New-Item -ItemType Directory -Force staging | Out-Null
           $exe = Get-ChildItem -Recurse -Filter RobloxProcessLookup.exe -Path bin/Release | Select-Object -First 1
-          Copy-Item $exe.FullName staging/
+          Copy-Item (Join-Path $exe.DirectoryName '*') staging/ -Recurse -Force
+          Get-ChildItem staging
       - uses: actions/upload-artifact@v4
         with:
           name: csharp-helper
-          path: lightweight/csharp/RobloxProcessLookup/staging/RobloxProcessLookup.exe
+          path: lightweight/csharp/RobloxProcessLookup/staging/
 
   package:
     needs: [rust, csharp]
