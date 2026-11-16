@@ -79,6 +79,23 @@ static class RobloxLauncher
             + (hasJob ? "&gameId=" + HttpUtility.UrlEncode(jobId) : "")
             + "&isPlayTogetherGame=false";
 
+        // Preferred: start RobloxPlayerBeta.exe directly, the same way the original app's
+        // "old join" path does. This fails with a clear error if Roblox isn't found.
+        string versionFolder = FindLatestVersionFolder();
+        if (versionFolder != null)
+        {
+            string exe = Path.Combine(versionFolder, "RobloxPlayerBeta.exe");
+            var info = new ProcessStartInfo(exe)
+            {
+                Arguments = "--app -t " + ticket + " -j \"" + placeLauncher + "\"",
+                UseShellExecute = false
+            };
+            Process started = Process.Start(info);
+            if (started == null) throw new InvalidOperationException("Windows did not start RobloxPlayerBeta.exe.");
+            return;
+        }
+
+        // Fallback: the roblox-player: link, which only works if Roblox registered that link.
         string link = "roblox-player:1+launchmode:play+gameinfo:" + ticket
             + "+launchtime:" + launchTime
             + "+placelauncherurl:" + HttpUtility.UrlEncode(placeLauncher)
