@@ -443,31 +443,15 @@ impl App {
         }
     }
 
-    /// Applies the saved FPS, graphics, and flag settings, then launches the selected accounts.
+    /// Applies the saved FPS, graphics, and flag settings in the background, then launches the selected accounts.
     /// Nothing is launched if a setting fails to apply.
     fn performance_launch(&mut self) {
-        let helper_path = PathBuf::from(&self.helper_path);
-        let mut problems = Vec::new();
-        if let Err(e) = helper::set_fps(&helper_path, self.settings.fps_cap) {
-            problems.push(format!("FPS: {e}"));
-        }
-        if let Err(e) = helper::set_graphics(&helper_path, self.settings.graphics_level) {
-            problems.push(format!("graphics: {e}"));
-        }
         let flags = self.flags_text.trim().to_string();
-        if !flags.is_empty() {
-            if let Err(e) = helper::apply_flags(&helper_path, &flags) {
-                problems.push(format!("flags: {e}"));
-            }
-        }
-        if !problems.is_empty() {
-            self.status = format!(
-                "Not launched. Could not apply settings: {}",
-                problems.join("; ")
-            );
-            return;
-        }
-        self.launch_selected();
+        self.launch_selected_with(Some((
+            self.settings.fps_cap,
+            self.settings.graphics_level,
+            flags,
+        )));
     }
 
     fn resize_windows(&mut self) {
@@ -519,6 +503,11 @@ impl App {
 
     /// Starts the selected accounts one after another, waiting the launch delay between each.
     fn launch_selected(&mut self) {
+        self.launch_selected_with(None);
+    }
+
+    /// `prelaunch` is (FPS cap, graphics level, flags). Those are applied in the background before any launch.
+    fn launch_selected_with(&mut self, prelaunch: Option<(u32, u32, String)>) {
         if self.pending_launch.is_some() {
             self.status = "Still launching the previous games. Please wait.".into();
             return;
@@ -552,6 +541,27 @@ impl App {
 
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
+            if let Some((fps, graphics, flags)) = prelaunch {
+                let mut problems = Vec::new();
+                if let Err(e) = helper::set_fps(&helper_path, fps) {
+                    problems.push(format!("FPS: {e}"));
+                }
+                if let Err(e) = helper::set_graphics(&helper_path, graphics) {
+                    problems.push(format!("graphics: {e}"));
+                }
+                if !flags.is_empty() {
+                    if let Err(e) = helper::apply_flags(&helper_path, &flags) {
+                        problems.push(format!("flags: {e}"));
+                    }
+                }
+                if !problems.is_empty() {
+                    let _ = tx.send(format!(
+                        "Not launched. Could not apply settings: {}",
+                        problems.join("; ")
+                    ));
+                    return;
+                }
+            }
             let mut launched = 0;
             let mut failed = Vec::new();
             for (i, (name, blob)) in targets.into_iter().enumerate() {
