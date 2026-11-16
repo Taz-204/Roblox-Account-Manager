@@ -9,7 +9,7 @@
 //   RobloxProcessLookup.exe flags           Read a JSON object of client flags from stdin and write them to Roblox's settings.
 //   RobloxProcessLookup.exe spread          Give each running Roblox window its own group of CPU cores. Prints the count.
 //   RobloxProcessLookup.exe resize <width> <height>  Resize every Roblox window. Prints the size applied for each.
-//   RobloxProcessLookup.exe priority        Lower the CPU priority of running Roblox windows. Prints the count.
+//   RobloxProcessLookup.exe priority [normal]  Set the priority of running Roblox windows (Below Normal, or Normal). Prints the count.
 //   RobloxProcessLookup.exe avatar <userId> <path>  Save the account's headshot as a PNG.
 //   RobloxProcessLookup.exe multi-instance  Hold Roblox's single-instance lock. Runs until ended.
 //
@@ -77,7 +77,9 @@ static class Program
                     return 0;
 
                 case "priority":
-                    Console.WriteLine(RobloxLauncher.LowerRobloxPriority());
+                    // "normal" sets Normal priority. Anything else sets Below Normal.
+                    bool normal = args.Length > 1 && args[1] == "normal";
+                    Console.WriteLine(RobloxLauncher.SetRobloxPriority(normal));
                     return 0;
 
                 case "avatar":

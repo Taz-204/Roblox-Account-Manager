@@ -237,14 +237,14 @@ static class RobloxLauncher
 
     // Lowers the CPU priority of every running Roblox window so they yield to other work.
     // Returns how many windows were changed.
-    public static int LowerRobloxPriority()
+    public static int SetRobloxPriority(bool normal)
     {
         int changed = 0;
         foreach (Process process in Process.GetProcessesByName("RobloxPlayerBeta"))
         {
             try
             {
-                process.PriorityClass = ProcessPriorityClass.BelowNormal;
+                process.PriorityClass = normal ? ProcessPriorityClass.Normal : ProcessPriorityClass.BelowNormal;
                 changed++;
             }
             catch (Exception)

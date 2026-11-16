@@ -116,9 +116,10 @@ pub fn resize_windows(helper: &Path, width: u32, height: u32) -> Result<String, 
     )
 }
 
-/// Lowers the CPU priority of running Roblox windows. Returns how many were changed.
-pub fn lower_priority(helper: &Path) -> Result<String, String> {
-    run(helper, &["priority"], "")
+/// Sets the CPU priority of running Roblox windows (Normal, or Below Normal). Returns how many changed.
+pub fn set_priority(helper: &Path, normal: bool) -> Result<String, String> {
+    let level = if normal { "normal" } else { "below" };
+    run(helper, &["priority", level], "")
 }
 
 /// Starts the helper that holds Roblox's single-instance lock. The caller keeps the child and kills it to turn this off.

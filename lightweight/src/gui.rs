@@ -50,6 +50,7 @@ enum Action {
     ApplyFlags,
     Spread,
     Resize,
+    ToggleCpuShare,
 }
 
 pub struct App {
@@ -479,7 +480,8 @@ impl App {
     }
 
     fn lower_priority(&mut self) {
-        match helper::lower_priority(&PathBuf::from(&self.helper_path)) {
+        let normal = self.settings.cpu_priority_normal;
+        match helper::set_priority(&PathBuf::from(&self.helper_path), normal) {
             Ok(count) => {
                 self.status = format!(
                     "Lowered priority of {} running Roblox window(s).",
@@ -520,6 +522,8 @@ impl App {
         let delay = Duration::from_millis(self.settings.launch_delay_ms);
         let helper_path = PathBuf::from(&self.helper_path);
         let count = targets.len();
+        let cpu_share = self.settings.cpu_share_on_launch;
+        let cpu_normal = self.settings.cpu_priority_normal;
 
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
@@ -535,6 +539,9 @@ impl App {
                 }
             }
             let mut message = format!("Launched {launched} of {count} in place {place_id}.");
+            if cpu_share && launched > 0 {
+                message.push_str(" CPU sharing applies in about 20 seconds.");
+            }
             if skipped > 0 {
                 message.push_str(&format!(" {skipped} without a cookie were skipped."));
             }
@@ -542,6 +549,13 @@ impl App {
                 message.push_str(&format!(" Failed: {}", failed.join("; ")));
             }
             let _ = tx.send(message);
+
+            if cpu_share && launched > 0 {
+                // Roblox needs a moment to open its windows before they can be adjusted.
+                thread::sleep(Duration::from_secs(20));
+                let _ = helper::set_priority(&helper_path, cpu_normal);
+                let _ = helper::spread_across_cores(&helper_path);
+            }
         });
 
         self.pending_launch = Some(rx);
@@ -761,9 +775,30 @@ impl App {
         });
 
         ui.separator();
+        ui.label("CPU sharing: after each launch, set the priority of Roblox windows and spread them across cores. Applies about 20 seconds after launch.");
+        if ui
+            .checkbox(
+                &mut self.settings.cpu_share_on_launch,
+                "Share CPU after launch",
+            )
+            .changed()
+        {
+            actions.push(Action::ToggleCpuShare);
+        }
+        if ui
+            .checkbox(
+                &mut self.settings.cpu_priority_normal,
+                "Use Normal priority (off = Below Normal)",
+            )
+            .changed()
+        {
+            actions.push(Action::ToggleCpuShare);
+        }
+
+        ui.separator();
         ui.label("Gives running Roblox windows less CPU priority. Can make the window you're watching stutter when the PC is busy.");
         if ui
-            .button("Lower priority of running Roblox windows")
+            .button("Set priority of running Roblox windows")
             .clicked()
         {
             actions.push(Action::LowerPriority);
@@ -917,6 +952,7 @@ impl eframe::App for App {
                 Action::LowerPriority => self.lower_priority(),
                 Action::ApplyFlags => self.apply_flags(),
                 Action::Spread => self.spread(),
+                Action::ToggleCpuShare => self.persist_settings(),
                 Action::Resize => self.resize_windows(),
             }
         }
