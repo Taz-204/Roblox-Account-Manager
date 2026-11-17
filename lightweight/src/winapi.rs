@@ -19,7 +19,8 @@ mod imp {
     };
 
     /// Lets the working-set maximum be enforced (the value from the Windows headers).
-    const QUOTA_LIMITS_HARDWS_MAX_ENABLE: u32 = 0x8;
+    const QUOTA_LIMITS_HARDWS_MAX_ENABLE: u32 = 0x4;
+    const QUOTA_LIMITS_HARDWS_MAX_DISABLE: u32 = 0x8;
 
     // Declared directly, because this version of the windows crate doesn't expose it.
     #[link(name = "kernel32")]
@@ -302,9 +303,13 @@ mod imp {
         let handle = unsafe { OpenProcess(access, false, pid) }.map_err(|e| e.to_string())?;
         let max = megabytes as usize * 1024 * 1024;
         let min = (1024 * 1024usize).min(max);
-        let accepted =
-            unsafe { SetProcessWorkingSetSizeEx(handle, min, max, QUOTA_LIMITS_HARDWS_MAX_ENABLE) }
-                .as_bool();
+        // 0 MB removes the cap. Otherwise the cap is enforced as a hard maximum.
+        let flags = if megabytes == 0 {
+            QUOTA_LIMITS_HARDWS_MAX_DISABLE
+        } else {
+            QUOTA_LIMITS_HARDWS_MAX_ENABLE
+        };
+        let accepted = unsafe { SetProcessWorkingSetSizeEx(handle, min, max, flags) }.as_bool();
         let result = if accepted {
             Ok(())
         } else {

@@ -60,6 +60,8 @@ enum Action {
     ClearHomeSelection,
     KillClients(Vec<u32>),
     ApplyTheme,
+    ApplyHomeCap,
+    RemoveHomeCap,
     LowerPriority,
     ApplyFlags,
     Spread,
@@ -104,6 +106,7 @@ pub struct App {
     ram_text: String,
     cpu_text: String,
     home_selected: BTreeSet<u32>,
+    home_cap_text: String,
 }
 
 impl App {
@@ -160,6 +163,7 @@ impl App {
             ram_text,
             cpu_text,
             home_selected: BTreeSet::new(),
+            home_cap_text: "512".to_string(),
         };
 
         // Re-apply saved settings on startup.
@@ -480,7 +484,7 @@ impl App {
             .unwrap_or_default()
     }
 
-    fn home_tab(&self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    fn home_tab(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         ui.heading("Home");
         let procs = self.procs_snapshot();
         let names: HashMap<u32, String> =
@@ -514,6 +518,23 @@ impl App {
                 actions.push(Action::ClearHomeSelection);
             }
             ui.label("Drag across rows to select several. Ctrl+click adds or removes one.");
+        });
+        ui.horizontal(|ui| {
+            ui.label("RAM cap for selected clients (MB):");
+            ui.add(egui::TextEdit::singleline(&mut self.home_cap_text).desired_width(70.0));
+            let count = self.home_selected.len();
+            if ui
+                .add_enabled(count > 0, egui::Button::new("Apply cap"))
+                .clicked()
+            {
+                actions.push(Action::ApplyHomeCap);
+            }
+            if ui
+                .add_enabled(count > 0, egui::Button::new("Remove cap"))
+                .clicked()
+            {
+                actions.push(Action::RemoveHomeCap);
+            }
         });
         ui.separator();
 
@@ -564,6 +585,49 @@ impl App {
         });
     }
 
+    /// Caps the RAM of every selected client at the value typed on the Home tab.
+    fn apply_home_cap(&mut self) {
+        let mb = match self.home_cap_text.trim().parse::<u32>() {
+            Ok(mb) if mb >= 64 => mb,
+            _ => {
+                self.status = "RAM cap must be a whole number of at least 64 MB.".into();
+                return;
+            }
+        };
+        self.set_caps(Some(mb));
+    }
+
+    /// Sets (Some) or removes (None) the RAM cap on every selected client.
+    fn set_caps(&mut self, mb: Option<u32>) {
+        let pids: Vec<u32> = self.home_selected.iter().copied().collect();
+        if pids.is_empty() {
+            self.status = "Select clients on the Home tab first.".into();
+            return;
+        }
+        if let Ok(mut caps) = self.monitor.ram_overrides.lock() {
+            for pid in &pids {
+                match mb {
+                    Some(mb) => {
+                        caps.insert(*pid, mb);
+                    }
+                    None => {
+                        caps.remove(pid);
+                    }
+                }
+            }
+        }
+        self.status = match mb {
+            Some(mb) => format!(
+                "Capped {} client(s) at {mb} MB. The cap takes effect within a second.",
+                pids.len()
+            ),
+            None => format!(
+                "Removed the cap from {} client(s). The global RAM limit applies again.",
+                pids.len()
+            ),
+        };
+    }
+
     fn kill_clients(&mut self, pids: &[u32]) {
         let mut killed = 0;
         let mut failed = Vec::new();
@@ -606,7 +670,7 @@ impl App {
                 cpu_percent: cpu,
             };
         }
-        self.status = "Limits saved. They apply to Roblox clients that start from now on.".into();
+        self.status = "Limits saved. They now apply to running and new Roblox clients.".into();
     }
 
     fn apply_flags(&mut self) {
@@ -1059,7 +1123,7 @@ impl App {
         });
 
         ui.separator();
-        ui.label("Limits for Roblox clients: they apply to clients that start after you save them. Running clients keep their current limits.");
+        ui.label("Global limits for every Roblox client. They apply to running clients within a second and to clients that start later. A RAM cap set on the Home tab overrides the global RAM limit for its clients.");
         ui.horizontal(|ui| {
             ui.label("RAM limit per client (MB, 0 = off, minimum 64):");
             ui.add(egui::TextEdit::singleline(&mut self.ram_text).desired_width(80.0));
@@ -1273,6 +1337,8 @@ impl eframe::App for App {
                 Action::ClearHomeSelection => self.home_selected.clear(),
                 Action::KillClients(pids) => self.kill_clients(&pids),
                 Action::ApplyTheme => self.persist_settings(),
+                Action::ApplyHomeCap => self.apply_home_cap(),
+                Action::RemoveHomeCap => self.set_caps(None),
                 Action::LowerPriority => self.lower_priority(),
                 Action::ApplyFlags => self.apply_flags(),
                 Action::Spread => self.spread(),

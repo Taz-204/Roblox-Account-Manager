@@ -1,8 +1,8 @@
 //! Background watcher for running Roblox clients.
 //!
 //! Once a second it samples every RobloxPlayerBeta process for CPU and memory use, and
-//! applies the RAM and CPU limits to each client the first time it sees it. The window
-//! reads the latest results from here, so it never waits on Windows.
+//! applies RAM and CPU limits. A cap chosen for a client on the Home tab overrides the global
+//! RAM limit for that client. The window reads the latest results from here.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::winapi;
 
-/// Limits applied to Roblox clients the monitor sees for the first time. 0 means off.
+/// Global limits applied to every Roblox client. 0 means off.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Limits {
     pub ram_mb: u32,
@@ -32,6 +32,8 @@ pub struct ProcInfo {
 #[derive(Clone)]
 pub struct Monitor {
     pub limits: Arc<Mutex<Limits>>,
+    /// RAM caps chosen for specific clients, in MB. They override the global RAM limit.
+    pub ram_overrides: Arc<Mutex<HashMap<u32, u32>>>,
     pub procs: Arc<Mutex<Vec<ProcInfo>>>,
 }
 
@@ -40,11 +42,13 @@ impl Monitor {
     pub fn start(limits: Limits) -> Self {
         let monitor = Monitor {
             limits: Arc::new(Mutex::new(limits)),
+            ram_overrides: Arc::new(Mutex::new(HashMap::new())),
             procs: Arc::new(Mutex::new(Vec::new())),
         };
-        let limits = monitor.limits.clone();
+        let shared_limits = monitor.limits.clone();
+        let overrides = monitor.ram_overrides.clone();
         let procs = monitor.procs.clone();
-        thread::spawn(move || run(limits, procs));
+        thread::spawn(move || run(shared_limits, overrides, procs));
         monitor
     }
 }
@@ -52,38 +56,52 @@ impl Monitor {
 /// What the monitor remembers about one client between samples.
 struct Known {
     last: Option<(Instant, u64)>,
+    /// The (RAM MB, CPU %) values last applied to this client.
+    applied: Option<(u32, u32)>,
     ram_limited: bool,
     cpu_limited: bool,
 }
 
-fn run(limits: Arc<Mutex<Limits>>, procs: Arc<Mutex<Vec<ProcInfo>>>) {
+fn run(
+    limits: Arc<Mutex<Limits>>,
+    overrides: Arc<Mutex<HashMap<u32, u32>>>,
+    procs: Arc<Mutex<Vec<ProcInfo>>>,
+) {
     let cores = winapi::cores().max(1) as f32;
     let mut known: HashMap<u32, Known> = HashMap::new();
 
     loop {
         let current = limits.lock().map(|l| *l).unwrap_or_default();
+        let caps: HashMap<u32, u32> = overrides.lock().map(|m| m.clone()).unwrap_or_default();
         let pids = winapi::roblox_process_ids();
         let now = Instant::now();
 
-        // Forget clients that have closed, so a new one with the same ID gets limits too.
+        // Forget clients that have closed, so a new one with the same ID starts fresh.
         known.retain(|pid, _| pids.contains(pid));
+        if let Ok(mut m) = overrides.lock() {
+            m.retain(|pid, _| pids.contains(pid));
+        }
 
         let mut snapshot = Vec::new();
         for pid in pids {
-            let is_new = !known.contains_key(&pid);
             let entry = known.entry(pid).or_insert(Known {
                 last: None,
+                applied: None,
                 ram_limited: false,
                 cpu_limited: false,
             });
 
-            if is_new {
-                if current.ram_mb > 0 {
-                    entry.ram_limited = winapi::limit_ram(pid, current.ram_mb).is_ok();
+            // A cap chosen for this client wins over the global RAM limit.
+            let ram_target = caps.get(&pid).copied().unwrap_or(current.ram_mb);
+            let cpu_target = current.cpu_percent;
+            if entry.applied != Some((ram_target, cpu_target)) {
+                // A RAM value of 0 removes the cap. A CPU job can't be removed, so a CPU cap stays once set.
+                let ram_ok = winapi::limit_ram(pid, ram_target).is_ok();
+                entry.ram_limited = ram_target > 0 && ram_ok;
+                if cpu_target > 0 && !entry.cpu_limited {
+                    entry.cpu_limited = winapi::limit_cpu(pid, cpu_target).is_ok();
                 }
-                if current.cpu_percent > 0 {
-                    entry.cpu_limited = winapi::limit_cpu(pid, current.cpu_percent).is_ok();
-                }
+                entry.applied = Some((ram_target, cpu_target));
             }
 
             let Some(sample) = winapi::sample(pid) else {
