@@ -324,12 +324,30 @@ static class RobloxLauncher
 
     // Roblox answers the first request with 403 on purpose, so error statuses are read, not thrown.
     // The cookie and csrf headers are optional (null leaves them out).
+    // A request that times out or loses its connection is tried once more on a fresh connection.
     static HttpWebResponse Send(string method, string url, string cookie, string csrf)
+    {
+        try
+        {
+            return SendOnce(method, url, cookie, csrf);
+        }
+        catch (WebException ex) when (ex.Status == WebExceptionStatus.Timeout || ex.Status == WebExceptionStatus.ConnectionClosed || ex.Status == WebExceptionStatus.KeepAliveFailure)
+        {
+            return SendOnce(method, url, cookie, csrf);
+        }
+    }
+
+    static HttpWebResponse SendOnce(string method, string url, string cookie, string csrf)
     {
         var request = (HttpWebRequest)WebRequest.Create(url);
         request.Method = method;
         request.Referer = Referer;
         request.AllowAutoRedirect = false;
+        // The launcher stays running between launches, so a pooled connection can go stale.
+        // Each request opens its own connection and gives up after 15 seconds.
+        request.KeepAlive = false;
+        request.Timeout = 15000;
+        request.ReadWriteTimeout = 15000;
         request.UserAgent = "RBX-Alt-Manager-Lite";
         if (cookie != null) request.Headers.Add(HttpRequestHeader.Cookie, ".ROBLOSECURITY=" + cookie);
         if (csrf != null) request.Headers["X-CSRF-TOKEN"] = csrf;
