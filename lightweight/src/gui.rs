@@ -696,13 +696,19 @@ impl App {
         ("FIntRenderLocalLightUpdatesMin", "6"),
     ];
 
+    /// Flags for lower textures. The value scale isn't documented, so 0 is a guess, and Roblox may ignore these.
+    const TEXTURE_FLAGS: &[(&str, &str)] = &[
+        ("DFFlagTextureQualityOverrideEnabled", "True"),
+        ("DFIntTextureQualityOverride", "0"),
+    ];
+
     /// Flags for "Stop animations". Characters may freeze with these on.
     const ANIMATION_FLAGS: &[(&str, &str)] = &[
         ("DFIntMaxActiveAnimationTracks", "0"),
         ("FIntGrassMovementReducedMotionFactor", "0"),
     ];
 
-    /// The flags sent to Roblox: the typed flags plus any checked presets. Presets are added last.
+    /// The flags sent to Roblox: the typed flags plus any enabled presets. Presets are added last.
     fn effective_flags(&self) -> String {
         let raw = self.flags_text.trim();
         let mut parts: Vec<String> = Vec::new();
@@ -715,16 +721,18 @@ impl App {
             // Not a JSON object. Send it unchanged so the helper reports the error.
             return raw.to_string();
         }
-        let presets = [
-            (self.settings.flag_shadows_off, Self::SHADOW_FLAGS),
-            (self.settings.flag_lighting_off, Self::LIGHTING_FLAGS),
-            (self.settings.flag_animation_off, Self::ANIMATION_FLAGS),
-        ];
-        for (on, flags) in presets {
-            if on {
-                for (name, value) in flags {
-                    parts.push(format!("\"{name}\": \"{value}\""));
-                }
+        let mut presets: Vec<&[(&str, &str)]> = Vec::new();
+        if self.settings.performance_flags {
+            presets.push(Self::SHADOW_FLAGS);
+            presets.push(Self::LIGHTING_FLAGS);
+            presets.push(Self::TEXTURE_FLAGS);
+        }
+        if self.settings.flag_animation_off {
+            presets.push(Self::ANIMATION_FLAGS);
+        }
+        for flags in presets {
+            for (name, value) in flags {
+                parts.push(format!("\"{name}\": \"{value}\""));
             }
         }
         if parts.is_empty() {
@@ -1235,17 +1243,12 @@ impl App {
                 .desired_width(f32::INFINITY)
                 .code_editor(),
         );
-        ui.label(
-            "Quick presets, added to the flags above. They apply now and on Performance launch.",
-        );
+        ui.label("Performance presets are added to the flags above. They apply now and on Performance launch.");
         let mut presets_changed = false;
         presets_changed |= ui
-            .checkbox(&mut self.settings.flag_shadows_off, "Turn off shadows")
-            .changed();
-        presets_changed |= ui
             .checkbox(
-                &mut self.settings.flag_lighting_off,
-                "Turn off lighting effects (post-processing, bloom, light fades)",
+                &mut self.settings.performance_flags,
+                "Turn on performance fast flags (shadows, lighting effects, low textures)",
             )
             .changed();
         presets_changed |= ui
