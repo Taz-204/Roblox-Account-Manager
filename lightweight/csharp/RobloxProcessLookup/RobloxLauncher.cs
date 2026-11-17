@@ -27,6 +27,8 @@ static class RobloxLauncher
     static RobloxLauncher()
     {
         ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+        // .NET Framework allows only 2 connections per host by default. Raise it for the long-running launcher.
+        ServicePointManager.DefaultConnectionLimit = 20;
     }
 
     // Encrypts the cookie so only this Windows user account can decrypt it.
@@ -297,10 +299,15 @@ static class RobloxLauncher
             .FirstOrDefault();
     }
 
+    // Every response is disposed. An open response holds a connection, and .NET Framework allows only a
+    // few per host, so leaking them makes later requests wait until they time out.
     static string GetCsrfToken(string cookie)
     {
-        HttpWebResponse response = Send("POST", AuthBase + "v1/authentication-ticket/", cookie, null);
-        string token = response.Headers["x-csrf-token"];
+        string token;
+        using (HttpWebResponse response = Send("POST", AuthBase + "v1/authentication-ticket/", cookie, null))
+        {
+            token = response.Headers["x-csrf-token"];
+        }
         if (string.IsNullOrEmpty(token))
             throw new InvalidOperationException("No X-CSRF-Token from Roblox. The login cookie may have expired.");
         return token;
@@ -308,22 +315,22 @@ static class RobloxLauncher
 
     static string GetTicket(string cookie, string csrf)
     {
-        HttpWebResponse response = Send("POST", AuthBase + "v1/authentication-ticket/", cookie, csrf);
-        string ticket = response.Headers["rbx-authentication-ticket"];
-        if (string.IsNullOrEmpty(ticket))
+        using (HttpWebResponse response = Send("POST", AuthBase + "v1/authentication-ticket/", cookie, csrf))
         {
-            string detail;
-            using (var reader = new StreamReader(response.GetResponseStream()))
+            string ticket = response.Headers["rbx-authentication-ticket"];
+            if (string.IsNullOrEmpty(ticket))
             {
-                detail = reader.ReadToEnd();
+                string detail;
+                using (var reader = new StreamReader(response.GetResponseStream()))
+                {
+                    detail = reader.ReadToEnd();
+                }
+                throw new InvalidOperationException("Roblox did not return an authentication ticket (HTTP " + (int)response.StatusCode + "). " + detail);
             }
-            throw new InvalidOperationException("Roblox did not return an authentication ticket (HTTP " + (int)response.StatusCode + "). " + detail);
+            return ticket;
         }
-        return ticket;
     }
 
-    // Roblox answers the first request with 403 on purpose, so error statuses are read, not thrown.
-    // The cookie and csrf headers are optional (null leaves them out).
     // A request that times out or loses its connection is tried once more on a fresh connection.
     static HttpWebResponse Send(string method, string url, string cookie, string csrf)
     {
