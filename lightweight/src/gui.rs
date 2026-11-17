@@ -61,6 +61,7 @@ enum Action {
     KillClients(Vec<u32>),
     ApplyTheme,
     ApplyHomeCap,
+    ApplyFlagPresets,
     RemoveHomeCap,
     LowerPriority,
     ApplyFlags,
@@ -673,12 +674,73 @@ impl App {
         self.status = "Limits saved. They now apply to running and new Roblox clients.".into();
     }
 
+    /// Flags for "Turn off shadows".
+    const SHADOW_FLAGS: &[(&str, &str)] = &[
+        ("FIntRenderShadowIntensity", "0"),
+        (
+            "DFIntCullFactorPixelThresholdShadowMapHighQuality",
+            "2147483647",
+        ),
+        (
+            "DFIntCullFactorPixelThresholdShadowMapLowQuality",
+            "2147483647",
+        ),
+    ];
+
+    /// Flags for "Turn off lighting effects".
+    const LIGHTING_FLAGS: &[(&str, &str)] = &[
+        ("FFlagDisablePostFx", "True"),
+        ("FFlagRenderNoLowFrmBloom", "False"),
+        ("FIntRenderLocalLightFadeInMs", "0"),
+        ("FIntRenderLocalLightUpdatesMax", "8"),
+        ("FIntRenderLocalLightUpdatesMin", "6"),
+    ];
+
+    /// Flags for "Stop animations". Characters may freeze with these on.
+    const ANIMATION_FLAGS: &[(&str, &str)] = &[
+        ("DFIntMaxActiveAnimationTracks", "0"),
+        ("FIntGrassMovementReducedMotionFactor", "0"),
+    ];
+
+    /// The flags sent to Roblox: the typed flags plus any checked presets. Presets are added last.
+    fn effective_flags(&self) -> String {
+        let raw = self.flags_text.trim();
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(inner) = raw.strip_prefix('{').and_then(|r| r.strip_suffix('}')) {
+            let inner = inner.trim();
+            if !inner.is_empty() {
+                parts.push(inner.to_string());
+            }
+        } else if !raw.is_empty() {
+            // Not a JSON object. Send it unchanged so the helper reports the error.
+            return raw.to_string();
+        }
+        let presets = [
+            (self.settings.flag_shadows_off, Self::SHADOW_FLAGS),
+            (self.settings.flag_lighting_off, Self::LIGHTING_FLAGS),
+            (self.settings.flag_animation_off, Self::ANIMATION_FLAGS),
+        ];
+        for (on, flags) in presets {
+            if on {
+                for (name, value) in flags {
+                    parts.push(format!("\"{name}\": \"{value}\""));
+                }
+            }
+        }
+        if parts.is_empty() {
+            "{}".to_string()
+        } else {
+            format!("{{{}}}", parts.join(", "))
+        }
+    }
+
     fn apply_flags(&mut self) {
         // The helper checks that the JSON is a valid flags object. Only a accepted set is saved,
         // so a bad entry is never retried at startup.
         let text = self.flags_text.trim().to_string();
         let helper_path = PathBuf::from(&self.helper_path);
-        match helper::apply_flags(&helper_path, &text) {
+        let effective = self.effective_flags();
+        match helper::apply_flags(&helper_path, &effective) {
             Ok(()) => match store::write_text(&store::flags_path(), &text) {
                 Ok(()) => self.status = "Flags saved and written. Restart Roblox to apply.".into(),
                 Err(e) => self.status = format!("Flags applied, but could not save them: {e}"),
@@ -690,7 +752,7 @@ impl App {
     /// Applies the saved FPS, graphics, and flag settings in the background, then launches the selected accounts.
     /// Nothing is launched if a setting fails to apply.
     fn performance_launch(&mut self) {
-        let flags = self.flags_text.trim().to_string();
+        let flags = self.effective_flags();
         self.launch_selected_with(Some((
             self.settings.fps_cap,
             self.settings.graphics_level,
@@ -1173,6 +1235,28 @@ impl App {
                 .desired_width(f32::INFINITY)
                 .code_editor(),
         );
+        ui.label(
+            "Quick presets, added to the flags above. They apply now and on Performance launch.",
+        );
+        let mut presets_changed = false;
+        presets_changed |= ui
+            .checkbox(&mut self.settings.flag_shadows_off, "Turn off shadows")
+            .changed();
+        presets_changed |= ui
+            .checkbox(
+                &mut self.settings.flag_lighting_off,
+                "Turn off lighting effects (post-processing, bloom, light fades)",
+            )
+            .changed();
+        presets_changed |= ui
+            .checkbox(
+                &mut self.settings.flag_animation_off,
+                "Stop animations (characters may freeze)",
+            )
+            .changed();
+        if presets_changed {
+            actions.push(Action::ApplyFlagPresets);
+        }
         if ui.button("Save and apply flags").clicked() {
             actions.push(Action::ApplyFlags);
         }
@@ -1338,6 +1422,10 @@ impl eframe::App for App {
                 Action::KillClients(pids) => self.kill_clients(&pids),
                 Action::ApplyTheme => self.persist_settings(),
                 Action::ApplyHomeCap => self.apply_home_cap(),
+                Action::ApplyFlagPresets => {
+                    self.persist_settings();
+                    self.apply_flags();
+                }
                 Action::RemoveHomeCap => self.set_caps(None),
                 Action::LowerPriority => self.lower_priority(),
                 Action::ApplyFlags => self.apply_flags(),

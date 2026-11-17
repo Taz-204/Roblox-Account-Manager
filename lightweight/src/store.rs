@@ -44,6 +44,10 @@ pub struct Settings {
     pub cpu_limit_percent: u32,
     /// Dark theme when true, light theme when false.
     pub dark_mode: bool,
+    /// Quick flag presets, added to the typed client flags.
+    pub flag_shadows_off: bool,
+    pub flag_lighting_off: bool,
+    pub flag_animation_off: bool,
 }
 
 impl Default for Settings {
@@ -58,6 +62,9 @@ impl Default for Settings {
             ram_limit_mb: 0,
             cpu_limit_percent: 0,
             dark_mode: true,
+            flag_shadows_off: false,
+            flag_lighting_off: false,
+            flag_animation_off: false,
         }
     }
 }
@@ -185,6 +192,9 @@ pub fn parse_settings(text: &str) -> Settings {
             "ram_limit_mb" => settings.ram_limit_mb = value.trim().parse().unwrap_or(0),
             "cpu_limit_percent" => settings.cpu_limit_percent = value.trim().parse().unwrap_or(0),
             "dark_mode" => settings.dark_mode = value.trim() != "false",
+            "flag_shadows_off" => settings.flag_shadows_off = value.trim() == "true",
+            "flag_lighting_off" => settings.flag_lighting_off = value.trim() == "true",
+            "flag_animation_off" => settings.flag_animation_off = value.trim() == "true",
             "launch_delay_ms" => {
                 settings.launch_delay_ms = value
                     .trim()
@@ -199,7 +209,7 @@ pub fn parse_settings(text: &str) -> Settings {
 
 pub fn format_settings(settings: &Settings) -> String {
     format!(
-        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\ndark_mode={}\n",
+        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\ndark_mode={}\nflag_shadows_off={}\nflag_lighting_off={}\nflag_animation_off={}\n",
         settings.multi_instance,
         settings.fps_cap,
         settings.launch_delay_ms,
@@ -208,7 +218,10 @@ pub fn format_settings(settings: &Settings) -> String {
         settings.cpu_priority_normal,
         settings.ram_limit_mb,
         settings.cpu_limit_percent,
-        settings.dark_mode
+        settings.dark_mode,
+        settings.flag_shadows_off,
+        settings.flag_lighting_off,
+        settings.flag_animation_off
     )
 }
 
@@ -368,6 +381,9 @@ mod tests {
             ram_limit_mb: 512,
             cpu_limit_percent: 40,
             dark_mode: false,
+            flag_shadows_off: true,
+            flag_lighting_off: true,
+            flag_animation_off: false,
         };
         assert_eq!(parse_settings(&format_settings(&settings)), settings);
     }
