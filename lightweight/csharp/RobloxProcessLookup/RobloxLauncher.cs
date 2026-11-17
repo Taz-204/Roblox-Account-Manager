@@ -333,7 +333,18 @@ static class RobloxLauncher
         }
         catch (WebException ex) when (ex.Status == WebExceptionStatus.Timeout || ex.Status == WebExceptionStatus.ConnectionClosed || ex.Status == WebExceptionStatus.KeepAliveFailure)
         {
-            return SendOnce(method, url, cookie, csrf);
+            try
+            {
+                return SendOnce(method, url, cookie, csrf);
+            }
+            catch (WebException again)
+            {
+                // Name the request that failed, so the error shows where Roblox stopped answering.
+                string host = new Uri(url).Host;
+                throw new InvalidOperationException(
+                    "Roblox did not answer " + method + " " + host + " after 2 tries (" + again.Status + "). " +
+                    "If you use a VPN, proxy or firewall, check that it allows Roblox.", again);
+            }
         }
     }
 
