@@ -61,7 +61,7 @@ enum Action {
     KillClients(Vec<u32>),
     ApplyTheme,
     ApplyHomeCap,
-    ApplyFlagPresets,
+    SetFlag(String, bool),
     RemoveHomeCap,
     LowerPriority,
     ApplyFlags,
@@ -674,49 +674,74 @@ impl App {
         self.status = "Limits saved. They now apply to running and new Roblox clients.".into();
     }
 
-    /// Flags for "Turn off shadows".
-    const SHADOW_FLAGS: &[(&str, &str)] = &[
-        ("FIntRenderShadowIntensity", "0"),
+    /// Every fast flag the app can set: (category, flag name, value). Each one is a checkbox in Settings.
+    const FAST_FLAGS: &[(&str, &str, &str)] = &[
+        ("Shadows", "FIntRenderShadowIntensity", "0"),
         (
+            "Shadows",
             "DFIntCullFactorPixelThresholdShadowMapHighQuality",
             "2147483647",
         ),
         (
+            "Shadows",
             "DFIntCullFactorPixelThresholdShadowMapLowQuality",
             "2147483647",
         ),
+        ("Lighting", "FFlagDisablePostFx", "True"),
+        ("Lighting", "FFlagRenderNoLowFrmBloom", "False"),
+        ("Lighting", "FIntRenderLocalLightFadeInMs", "0"),
+        ("Lighting", "FIntRenderLocalLightUpdatesMax", "8"),
+        ("Lighting", "FIntRenderLocalLightUpdatesMin", "6"),
+        (
+            "Textures (may not take effect)",
+            "DFFlagTextureQualityOverrideEnabled",
+            "True",
+        ),
+        (
+            "Textures (may not take effect)",
+            "DFIntTextureQualityOverride",
+            "0",
+        ),
+        (
+            "Animations (characters may freeze)",
+            "DFIntMaxActiveAnimationTracks",
+            "0",
+        ),
+        (
+            "Animations (characters may freeze)",
+            "FIntGrassMovementReducedMotionFactor",
+            "0",
+        ),
+        (
+            "Extra (caps FPS at 10)",
+            "DFFlagDebugPauseVoxelizer",
+            "True",
+        ),
+        (
+            "Extra (caps FPS at 10)",
+            "DFIntTaskSchedulerTargetFps",
+            "10",
+        ),
+        ("Extra (caps FPS at 10)", "FFlagDebugSkyGray", "True"),
+        ("Extra (caps FPS at 10)", "FIntFRMMaxGrassDistance", "0"),
+        ("Extra (caps FPS at 10)", "FIntFRMMinGrassDistance", "0"),
     ];
 
-    /// Flags for "Turn off lighting effects".
-    const LIGHTING_FLAGS: &[(&str, &str)] = &[
-        ("FFlagDisablePostFx", "True"),
-        ("FFlagRenderNoLowFrmBloom", "False"),
-        ("FIntRenderLocalLightFadeInMs", "0"),
-        ("FIntRenderLocalLightUpdatesMax", "8"),
-        ("FIntRenderLocalLightUpdatesMin", "6"),
-    ];
-
-    /// Extra performance flags from the user's list. Caps the client at 10 FPS, which overrides the FPS setting.
-    const EXTRA_FLAGS: &[(&str, &str)] = &[
-        ("DFFlagDebugPauseVoxelizer", "True"),
-        ("DFIntTaskSchedulerTargetFps", "10"),
-        ("FFlagDebugSkyGray", "True"),
-        ("FIntFRMMaxGrassDistance", "0"),
-        ("FIntFRMMinGrassDistance", "0"),
-        ("FIntRenderShadowIntensity", "0"),
-    ];
-
-    /// Flags for lower textures. The value scale isn't documented, so 0 is a guess, and Roblox may ignore these.
-    const TEXTURE_FLAGS: &[(&str, &str)] = &[
-        ("DFFlagTextureQualityOverrideEnabled", "True"),
-        ("DFIntTextureQualityOverride", "0"),
-    ];
-
-    /// Flags for "Stop animations". Characters may freeze with these on.
-    const ANIMATION_FLAGS: &[(&str, &str)] = &[
-        ("DFIntMaxActiveAnimationTracks", "0"),
-        ("FIntGrassMovementReducedMotionFactor", "0"),
-    ];
+    /// Turns one fast flag on or off in the saved list.
+    fn set_flag(&mut self, name: &str, on: bool) {
+        let mut names: Vec<String> = self
+            .settings
+            .enabled_flags
+            .split(',')
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty())
+            .collect();
+        names.retain(|f| f != name);
+        if on {
+            names.push(name.to_string());
+        }
+        self.settings.enabled_flags = names.join(",");
+    }
 
     /// The flags sent to Roblox: the typed flags plus any enabled presets. Presets are added last.
     fn effective_flags(&self) -> String {
@@ -731,20 +756,13 @@ impl App {
             // Not a JSON object. Send it unchanged so the helper reports the error.
             return raw.to_string();
         }
-        let mut presets: Vec<&[(&str, &str)]> = Vec::new();
-        if self.settings.performance_flags {
-            presets.push(Self::SHADOW_FLAGS);
-            presets.push(Self::LIGHTING_FLAGS);
-            presets.push(Self::TEXTURE_FLAGS);
-        }
-        if self.settings.flag_animation_off {
-            presets.push(Self::ANIMATION_FLAGS);
-        }
-        if self.settings.flag_extra_performance {
-            presets.push(Self::EXTRA_FLAGS);
-        }
-        for flags in presets {
-            for (name, value) in flags {
+        for (_, name, value) in Self::FAST_FLAGS {
+            if self
+                .settings
+                .enabled_flags
+                .split(',')
+                .any(|f| f.trim() == *name)
+            {
                 parts.push(format!("\"{name}\": \"{value}\""));
             }
         }
@@ -775,8 +793,7 @@ impl App {
     fn performance_launch(&mut self) {
         let flags = self.effective_flags();
         self.launch_selected_with(Some((
-            self.settings.fps_cap,
-            self.settings.graphics_level,
+            Some((self.settings.fps_cap, self.settings.graphics_level)),
             flags,
         )));
     }
@@ -830,11 +847,18 @@ impl App {
 
     /// Starts the selected accounts one after another, waiting the launch delay between each.
     fn launch_selected(&mut self) {
-        self.launch_selected_with(None);
+        // Typed flags and enabled fast flags are applied before every launch.
+        let flags = self.effective_flags();
+        let prelaunch = if flags == "{}" {
+            None
+        } else {
+            Some((None, flags))
+        };
+        self.launch_selected_with(prelaunch);
     }
 
-    /// `prelaunch` is (FPS cap, graphics level, flags). Those are applied in the background before any launch.
-    fn launch_selected_with(&mut self, prelaunch: Option<(u32, u32, String)>) {
+    /// `prelaunch` is (optional FPS cap and graphics level, flags). They are applied in the background before any launch.
+    fn launch_selected_with(&mut self, prelaunch: Option<(Option<(u32, u32)>, String)>) {
         if self.pending_launch.is_some() {
             self.status = "Still launching the previous games. Please wait.".into();
             return;
@@ -879,13 +903,15 @@ impl App {
         let launched_map = self.launched.clone();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            if let Some((fps, graphics, flags)) = prelaunch {
+            if let Some((fps_graphics, flags)) = prelaunch {
                 let mut problems = Vec::new();
-                if let Err(e) = helper::set_fps(&helper_path, fps) {
-                    problems.push(format!("FPS: {e}"));
-                }
-                if let Err(e) = helper::set_graphics(&helper_path, graphics) {
-                    problems.push(format!("graphics: {e}"));
+                if let Some((fps, graphics)) = fps_graphics {
+                    if let Err(e) = helper::set_fps(&helper_path, fps) {
+                        problems.push(format!("FPS: {e}"));
+                    }
+                    if let Err(e) = helper::set_graphics(&helper_path, graphics) {
+                        problems.push(format!("graphics: {e}"));
+                    }
                 }
                 if !flags.is_empty() {
                     if let Err(e) = helper::apply_flags(&helper_path, &flags) {
@@ -1256,28 +1282,19 @@ impl App {
                 .desired_width(f32::INFINITY)
                 .code_editor(),
         );
-        ui.label("Performance presets are added to the flags above. They apply now and on Performance launch.");
-        let mut presets_changed = false;
-        presets_changed |= ui
-            .checkbox(
-                &mut self.settings.performance_flags,
-                "Turn on performance fast flags (shadows, lighting effects, low textures)",
-            )
-            .changed();
-        presets_changed |= ui
-            .checkbox(
-                &mut self.settings.flag_animation_off,
-                "Stop animations (characters may freeze)",
-            )
-            .changed();
-        presets_changed |= ui
-            .checkbox(
-                &mut self.settings.flag_extra_performance,
-                "Extra performance flags (caps FPS at 10)",
-            )
-            .changed();
-        if presets_changed {
-            actions.push(Action::ApplyFlagPresets);
+        ui.label("Fast flags. Checked flags are applied before each launch, and right away when you change them.");
+        for (category, name, value) in Self::FAST_FLAGS {
+            let mut on = self
+                .settings
+                .enabled_flags
+                .split(',')
+                .any(|f| f.trim() == *name);
+            if ui
+                .checkbox(&mut on, format!("{category}: {name} = {value}"))
+                .changed()
+            {
+                actions.push(Action::SetFlag(name.to_string(), on));
+            }
         }
         if ui.button("Save and apply flags").clicked() {
             actions.push(Action::ApplyFlags);
@@ -1444,7 +1461,8 @@ impl eframe::App for App {
                 Action::KillClients(pids) => self.kill_clients(&pids),
                 Action::ApplyTheme => self.persist_settings(),
                 Action::ApplyHomeCap => self.apply_home_cap(),
-                Action::ApplyFlagPresets => {
+                Action::SetFlag(name, on) => {
+                    self.set_flag(&name, on);
                     self.persist_settings();
                     self.apply_flags();
                 }

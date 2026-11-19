@@ -45,10 +45,8 @@ pub struct Settings {
     /// Dark theme when true, light theme when false.
     pub dark_mode: bool,
     /// Quick flag presets, added to the typed client flags.
-    pub performance_flags: bool,
-    pub flag_animation_off: bool,
-    /// Extra performance flags from the user's list. Caps FPS at 10 when on.
-    pub flag_extra_performance: bool,
+    /// Names of the fast flags turned on, separated by commas.
+    pub enabled_flags: String,
 }
 
 impl Default for Settings {
@@ -63,9 +61,7 @@ impl Default for Settings {
             ram_limit_mb: 0,
             cpu_limit_percent: 0,
             dark_mode: true,
-            performance_flags: false,
-            flag_animation_off: false,
-            flag_extra_performance: false,
+            enabled_flags: String::new(),
         }
     }
 }
@@ -193,9 +189,7 @@ pub fn parse_settings(text: &str) -> Settings {
             "ram_limit_mb" => settings.ram_limit_mb = value.trim().parse().unwrap_or(0),
             "cpu_limit_percent" => settings.cpu_limit_percent = value.trim().parse().unwrap_or(0),
             "dark_mode" => settings.dark_mode = value.trim() != "false",
-            "performance_flags" => settings.performance_flags = value.trim() == "true",
-            "flag_animation_off" => settings.flag_animation_off = value.trim() == "true",
-            "flag_extra_performance" => settings.flag_extra_performance = value.trim() == "true",
+            "enabled_flags" => settings.enabled_flags = value.trim().to_string(),
             "launch_delay_ms" => {
                 settings.launch_delay_ms = value
                     .trim()
@@ -210,7 +204,7 @@ pub fn parse_settings(text: &str) -> Settings {
 
 pub fn format_settings(settings: &Settings) -> String {
     format!(
-        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\ndark_mode={}\nperformance_flags={}\nflag_animation_off={}\nflag_extra_performance={}\n",
+        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\ndark_mode={}\nenabled_flags={}\n",
         settings.multi_instance,
         settings.fps_cap,
         settings.launch_delay_ms,
@@ -220,9 +214,7 @@ pub fn format_settings(settings: &Settings) -> String {
         settings.ram_limit_mb,
         settings.cpu_limit_percent,
         settings.dark_mode,
-        settings.performance_flags,
-        settings.flag_animation_off,
-        settings.flag_extra_performance
+        settings.enabled_flags
     )
 }
 
@@ -382,9 +374,7 @@ mod tests {
             ram_limit_mb: 512,
             cpu_limit_percent: 40,
             dark_mode: false,
-            performance_flags: true,
-            flag_animation_off: false,
-            flag_extra_performance: true,
+            enabled_flags: "FIntRenderShadowIntensity,FFlagDebugSkyGray".to_string(),
         };
         assert_eq!(parse_settings(&format_settings(&settings)), settings);
     }
