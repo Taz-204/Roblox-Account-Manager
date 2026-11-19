@@ -1405,8 +1405,12 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Home => self.home_tab(ui, &mut actions),
             Tab::Accounts => self.accounts_tab(ui, &mut actions),
-            Tab::Presets => self.presets_tab(ui, &mut actions),
-            Tab::Settings => self.settings_tab(ui, &mut actions),
+            Tab::Presets => {
+                egui::ScrollArea::vertical().show(ui, |ui| self.presets_tab(ui, &mut actions));
+            }
+            Tab::Settings => {
+                egui::ScrollArea::vertical().show(ui, |ui| self.settings_tab(ui, &mut actions));
+            }
         });
 
         for action in actions {
