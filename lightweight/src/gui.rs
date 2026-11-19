@@ -108,6 +108,8 @@ pub struct App {
     cpu_text: String,
     home_selected: BTreeSet<u32>,
     home_cap_text: String,
+    /// The flags text last written to the client, so an unchanged set isn't written again.
+    flags_applied: Arc<Mutex<Option<String>>>,
 }
 
 impl App {
@@ -165,6 +167,7 @@ impl App {
             cpu_text,
             home_selected: BTreeSet::new(),
             home_cap_text: "512".to_string(),
+            flags_applied: Arc::new(Mutex::new(None)),
         };
 
         // Re-apply saved settings on startup.
@@ -780,10 +783,17 @@ impl App {
         let helper_path = PathBuf::from(&self.helper_path);
         let effective = self.effective_flags();
         match helper::apply_flags(&helper_path, &effective) {
-            Ok(()) => match store::write_text(&store::flags_path(), &text) {
-                Ok(()) => self.status = "Flags saved and written. Restart Roblox to apply.".into(),
-                Err(e) => self.status = format!("Flags applied, but could not save them: {e}"),
-            },
+            Ok(()) => {
+                if let Ok(mut applied) = self.flags_applied.lock() {
+                    *applied = Some(effective.clone());
+                }
+                match store::write_text(&store::flags_path(), &text) {
+                    Ok(()) => {
+                        self.status = "Flags saved and written. Restart Roblox to apply.".into()
+                    }
+                    Err(e) => self.status = format!("Flags applied, but could not save them: {e}"),
+                }
+            }
             Err(e) => self.status = format!("Flags rejected: {e}"),
         }
     }
@@ -847,9 +857,14 @@ impl App {
 
     /// Starts the selected accounts one after another, waiting the launch delay between each.
     fn launch_selected(&mut self) {
-        // Typed flags and enabled fast flags are applied before every launch.
+        // Flags are written only when they differ from what the client already has.
         let flags = self.effective_flags();
-        let prelaunch = if flags == "{}" {
+        let already_written = self
+            .flags_applied
+            .lock()
+            .map(|applied| applied.as_deref() == Some(flags.as_str()))
+            .unwrap_or(false);
+        let prelaunch = if flags == "{}" || already_written {
             None
         } else {
             Some((None, flags))
@@ -901,6 +916,7 @@ impl App {
         }
 
         let launched_map = self.launched.clone();
+        let flags_applied = self.flags_applied.clone();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             if let Some((fps_graphics, flags)) = prelaunch {
@@ -914,8 +930,13 @@ impl App {
                     }
                 }
                 if !flags.is_empty() {
-                    if let Err(e) = helper::apply_flags(&helper_path, &flags) {
-                        problems.push(format!("flags: {e}"));
+                    match helper::apply_flags(&helper_path, &flags) {
+                        Ok(()) => {
+                            if let Ok(mut applied) = flags_applied.lock() {
+                                *applied = Some(flags.clone());
+                            }
+                        }
+                        Err(e) => problems.push(format!("flags: {e}")),
                     }
                 }
                 if !problems.is_empty() {
@@ -958,7 +979,7 @@ impl App {
             }
             if !started.is_empty() {
                 // Give the clients a few seconds to start, then check they are still running.
-                thread::sleep(Duration::from_secs(5));
+                thread::sleep(Duration::from_secs(3));
                 let running = winapi::roblox_process_ids();
                 let closed: Vec<String> = started
                     .iter()
