@@ -696,6 +696,16 @@ impl App {
         ("FIntRenderLocalLightUpdatesMin", "6"),
     ];
 
+    /// Extra performance flags from the user's list. Caps the client at 10 FPS, which overrides the FPS setting.
+    const EXTRA_FLAGS: &[(&str, &str)] = &[
+        ("DFFlagDebugPauseVoxelizer", "True"),
+        ("DFIntTaskSchedulerTargetFps", "10"),
+        ("FFlagDebugSkyGray", "True"),
+        ("FIntFRMMaxGrassDistance", "0"),
+        ("FIntFRMMinGrassDistance", "0"),
+        ("FIntRenderShadowIntensity", "0"),
+    ];
+
     /// Flags for lower textures. The value scale isn't documented, so 0 is a guess, and Roblox may ignore these.
     const TEXTURE_FLAGS: &[(&str, &str)] = &[
         ("DFFlagTextureQualityOverrideEnabled", "True"),
@@ -729,6 +739,9 @@ impl App {
         }
         if self.settings.flag_animation_off {
             presets.push(Self::ANIMATION_FLAGS);
+        }
+        if self.settings.flag_extra_performance {
+            presets.push(Self::EXTRA_FLAGS);
         }
         for flags in presets {
             for (name, value) in flags {
@@ -1255,6 +1268,12 @@ impl App {
             .checkbox(
                 &mut self.settings.flag_animation_off,
                 "Stop animations (characters may freeze)",
+            )
+            .changed();
+        presets_changed |= ui
+            .checkbox(
+                &mut self.settings.flag_extra_performance,
+                "Extra performance flags (caps FPS at 10)",
             )
             .changed();
         if presets_changed {

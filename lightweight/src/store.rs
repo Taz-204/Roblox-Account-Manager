@@ -47,6 +47,8 @@ pub struct Settings {
     /// Quick flag presets, added to the typed client flags.
     pub performance_flags: bool,
     pub flag_animation_off: bool,
+    /// Extra performance flags from the user's list. Caps FPS at 10 when on.
+    pub flag_extra_performance: bool,
 }
 
 impl Default for Settings {
@@ -63,6 +65,7 @@ impl Default for Settings {
             dark_mode: true,
             performance_flags: false,
             flag_animation_off: false,
+            flag_extra_performance: false,
         }
     }
 }
@@ -192,6 +195,7 @@ pub fn parse_settings(text: &str) -> Settings {
             "dark_mode" => settings.dark_mode = value.trim() != "false",
             "performance_flags" => settings.performance_flags = value.trim() == "true",
             "flag_animation_off" => settings.flag_animation_off = value.trim() == "true",
+            "flag_extra_performance" => settings.flag_extra_performance = value.trim() == "true",
             "launch_delay_ms" => {
                 settings.launch_delay_ms = value
                     .trim()
@@ -206,7 +210,7 @@ pub fn parse_settings(text: &str) -> Settings {
 
 pub fn format_settings(settings: &Settings) -> String {
     format!(
-        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\ndark_mode={}\nperformance_flags={}\nflag_animation_off={}\n",
+        "multi_instance={}\nfps_cap={}\nlaunch_delay_ms={}\ngraphics_level={}\ncpu_share_on_launch={}\ncpu_priority_normal={}\nram_limit_mb={}\ncpu_limit_percent={}\ndark_mode={}\nperformance_flags={}\nflag_animation_off={}\nflag_extra_performance={}\n",
         settings.multi_instance,
         settings.fps_cap,
         settings.launch_delay_ms,
@@ -217,7 +221,8 @@ pub fn format_settings(settings: &Settings) -> String {
         settings.cpu_limit_percent,
         settings.dark_mode,
         settings.performance_flags,
-        settings.flag_animation_off
+        settings.flag_animation_off,
+        settings.flag_extra_performance
     )
 }
 
@@ -379,6 +384,7 @@ mod tests {
             dark_mode: false,
             performance_flags: true,
             flag_animation_off: false,
+            flag_extra_performance: true,
         };
         assert_eq!(parse_settings(&format_settings(&settings)), settings);
     }
