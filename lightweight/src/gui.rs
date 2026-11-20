@@ -979,7 +979,7 @@ impl App {
             }
             if !started.is_empty() {
                 // Give the clients a few seconds to start, then check they are still running.
-                thread::sleep(Duration::from_secs(3));
+                thread::sleep(Duration::from_secs(2));
                 let running = winapi::roblox_process_ids();
                 let closed: Vec<String> = started
                     .iter()

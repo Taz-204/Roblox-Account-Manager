@@ -362,10 +362,10 @@ static class RobloxLauncher
         request.Referer = Referer;
         request.AllowAutoRedirect = false;
         // The launcher stays running between launches, so a pooled connection can go stale.
-        // Each request opens its own connection and gives up after 15 seconds.
+        // Each request opens its own connection and gives up after 5 seconds.
         request.KeepAlive = false;
-        request.Timeout = 15000;
-        request.ReadWriteTimeout = 15000;
+        request.Timeout = 5000;
+        request.ReadWriteTimeout = 5000;
         request.UserAgent = "RBX-Alt-Manager-Lite";
         if (cookie != null) request.Headers.Add(HttpRequestHeader.Cookie, ".ROBLOSECURITY=" + cookie);
         if (csrf != null) request.Headers["X-CSRF-TOKEN"] = csrf;
