@@ -247,6 +247,21 @@ impl App {
     }
 
     /// Saves a new account. A blank name uses the username Roblox reports for the cookie.
+    /// Returns `base`, or `base (2)`, `base (3)`... if another account already uses it.
+    fn unique_name(&self, base: &str) -> String {
+        if base.is_empty() || self.name_is_free(base) {
+            return base.to_string();
+        }
+        let mut n = 2;
+        loop {
+            let candidate = format!("{base} ({n})");
+            if self.name_is_free(&candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
     fn save_new_account(
         &mut self,
         typed_name: &str,
@@ -255,8 +270,20 @@ impl App {
         username: String,
         user_id: String,
     ) -> bool {
+        // The same Roblox account logged in again: refresh its saved login instead of adding a copy.
+        if !user_id.is_empty() {
+            if let Some(index) = self.accounts.iter().position(|a| a.user_id == user_id) {
+                let existing = self.accounts[index].name.clone();
+                self.accounts[index].cookie_blob = cookie_blob;
+                self.select_only(index);
+                self.persist_accounts();
+                self.status = format!("Updated the saved login for {existing}.");
+                return true;
+            }
+        }
+
         let name = if typed_name.is_empty() {
-            store::clean_field(&username)
+            self.unique_name(&store::clean_field(&username))
         } else {
             typed_name.to_string()
         };
