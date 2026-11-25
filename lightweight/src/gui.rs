@@ -360,16 +360,37 @@ impl App {
         };
         match result {
             Ok(info) => {
+                // Roblox gave no username and no name was typed: keep the login under a numbered name.
+                let no_name = login.name.is_empty() && info.username.is_empty();
+                let username = if no_name {
+                    format!("Account {}", self.accounts.len() + 1)
+                } else {
+                    info.username.clone()
+                };
                 let saved = self.save_new_account(
                     &login.name,
                     login.note,
                     info.blob,
-                    info.username,
+                    username,
                     info.user_id,
                 );
                 if saved {
                     self.new_name.clear();
                     self.new_note.clear();
+                    if no_name {
+                        let reason = if info.reason.is_empty() {
+                            "Roblox did not send a username".to_string()
+                        } else {
+                            format!("Roblox did not send a username ({})", info.reason)
+                        };
+                        self.status = format!(
+                            "{reason}. Saved the login as {}. To pick the name, type it in the box before logging in.",
+                            self.accounts
+                                .last()
+                                .map(|a| a.name.clone())
+                                .unwrap_or_default()
+                        );
+                    }
                 }
             }
             Err(e) => self.status = format!("Login failed: {e}"),

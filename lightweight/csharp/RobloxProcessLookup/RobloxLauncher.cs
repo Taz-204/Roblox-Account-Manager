@@ -11,6 +11,7 @@ using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Web;
 using System.Web.Script.Serialization;
 
@@ -46,32 +47,53 @@ static class RobloxLauncher
         return Encoding.UTF8.GetString(data);
     }
 
-    // Returns { encrypted cookie, username, user id }. Name and id are "" if Roblox didn't say.
+    // Returns { encrypted cookie, username, user id, reason }. Name and id are "" if Roblox didn't say.
+    // reason is "" on success, otherwise why the lookup failed (for example "HTTP 401").
+    // The lookup is retried, since Roblox can take a moment to accept a brand-new login.
     public static string[] ProtectWithAccount(string cookie)
     {
         string blob = Protect(cookie);
         string name = "";
         string id = "";
+        string reason = "";
 
-        Dictionary<string, object> user = GetAuthenticatedUser(cookie);
-        if (user != null)
+        for (int attempt = 1; attempt <= 3; attempt++)
         {
-            object value;
-            if (user.TryGetValue("name", out value) && value != null) name = value.ToString();
-            if (user.TryGetValue("id", out value) && value != null) id = value.ToString();
+            try
+            {
+                HttpWebResponse response = Send("GET", UsersBase + "v1/users/authenticated", cookie, null);
+                using (response)
+                {
+                    if (response.StatusCode != HttpStatusCode.OK)
+                    {
+                        reason = "HTTP " + (int)response.StatusCode;
+                    }
+                    else
+                    {
+                        Dictionary<string, object> user;
+                        using (var reader = new StreamReader(response.GetResponseStream()))
+                        {
+                            user = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
+                        }
+                        object value;
+                        if (user != null && user.TryGetValue("name", out value) && value != null) name = value.ToString();
+                        if (user != null && user.TryGetValue("id", out value) && value != null) id = value.ToString();
+                        if (name.Length > 0)
+                        {
+                            reason = "";
+                            break;
+                        }
+                        reason = "Roblox sent no username";
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                reason = e.Message;
+            }
+            if (attempt < 3) Thread.Sleep(1000);
         }
-        return new[] { blob, name, id };
-    }
-
-    static Dictionary<string, object> GetAuthenticatedUser(string cookie)
-    {
-        HttpWebResponse response = Send("GET", UsersBase + "v1/users/authenticated", cookie, null);
-        if (response.StatusCode != HttpStatusCode.OK) return null;
-
-        using (var reader = new StreamReader(response.GetResponseStream()))
-        {
-            return new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(reader.ReadToEnd());
-        }
+        return new[] { blob, name, id, reason };
     }
 
     // Downloads the account's headshot to destination (a PNG file). Thumbnails are public, so no cookie is sent.

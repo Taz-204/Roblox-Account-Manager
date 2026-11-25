@@ -53,9 +53,11 @@ pub struct AccountInfo {
     pub blob: String,
     pub username: String,
     pub user_id: String,
+    /// Why Roblox gave no username (for example "HTTP 401"). Empty when the lookup worked.
+    pub reason: String,
 }
 
-/// The helper prints the blob, username, and user ID on separate lines (the last two may be empty).
+/// The helper prints the blob, username, user ID and lookup reason on separate lines (all but the blob may be empty).
 fn parse_account_info(output: &str) -> Result<AccountInfo, String> {
     let mut lines = output.lines().map(|l| l.trim().to_string());
     let blob = lines.next().unwrap_or_default();
@@ -66,6 +68,7 @@ fn parse_account_info(output: &str) -> Result<AccountInfo, String> {
         blob,
         username: lines.next().unwrap_or_default(),
         user_id: lines.next().unwrap_or_default(),
+        reason: lines.next().unwrap_or_default(),
     })
 }
 
