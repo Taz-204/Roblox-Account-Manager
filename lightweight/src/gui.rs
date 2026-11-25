@@ -41,6 +41,7 @@ enum Action {
     AddAccount,
     Login,
     RemoveSelected,
+    DeleteOne(usize),
     Launch,
     PerformanceLaunch,
     NoteChanged,
@@ -390,6 +391,17 @@ impl App {
             self.persist_accounts();
             self.status = format!("Removed {}.", removed.join(", "));
         }
+    }
+
+    fn delete_one(&mut self, index: usize) {
+        if index >= self.accounts.len() {
+            return;
+        }
+        let name = self.accounts.remove(index).name;
+        self.selected.clear();
+        self.anchor = None;
+        self.persist_accounts();
+        self.status = format!("Removed {name}.");
     }
 
     fn add_preset(&mut self) {
@@ -1115,6 +1127,13 @@ impl App {
                         } else {
                             ui.colored_label(egui::Color32::GRAY, "Inactive");
                         }
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Remove this account from the list")
+                            .clicked()
+                        {
+                            actions.push(Action::DeleteOne(i));
+                        }
                         if response.clicked() {
                             let modifiers = ui.input(|input| input.modifiers);
                             actions.push(Action::Select {
@@ -1472,6 +1491,7 @@ impl eframe::App for App {
                 Action::AddAccount => self.add_account(),
                 Action::Login => self.start_browser_login(),
                 Action::RemoveSelected => self.remove_selected(),
+                Action::DeleteOne(index) => self.delete_one(index),
                 Action::Launch => self.launch_selected(),
                 Action::PerformanceLaunch => self.performance_launch(),
                 Action::NoteChanged => self.persist_accounts(),
